@@ -996,8 +996,10 @@ function startAutoWalk(preferredDirection = 0, duration = WALK_DURATION, { annou
     }
 
     const safeDuration = clamp(finiteNumber(duration, WALK_DURATION), 600, 6000);
-    roamRun = { ...path, duration: safeDuration, startedAt: undefined };
+    const strideLength = Math.max(48, ui.root.getBoundingClientRect().width * 0.52);
+    roamRun = { ...path, duration: safeDuration, strideLength, startedAt: undefined };
     renderer.setWalkDirection(path.direction);
+    renderer.setWalkProgress(0, strideLength);
     renderer.setState(PET_STATES.IDLE);
     renderer.setForm('walking');
     ui.root.setAttribute('aria-label', '糯叽正在走过来陪你');
@@ -1014,10 +1016,9 @@ function startAutoWalk(preferredDirection = 0, duration = WALK_DURATION, { annou
         }
         const progress = clamp((now - roamRun.startedAt) / roamRun.duration, 0, 1);
         const eased = progress * progress * (3 - 2 * progress);
-        setPixelPosition(
-            roamRun.startLeft + (roamRun.targetLeft - roamRun.startLeft) * eased,
-            roamRun.startTop,
-        );
+        const currentLeft = roamRun.startLeft + (roamRun.targetLeft - roamRun.startLeft) * eased;
+        setPixelPosition(currentLeft, roamRun.startTop);
+        renderer.setWalkProgress(Math.abs(currentLeft - roamRun.startLeft), roamRun.strideLength);
         if (progress < 1) {
             roamFrame = window.requestAnimationFrame(step);
             return;

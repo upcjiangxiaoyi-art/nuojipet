@@ -23,7 +23,19 @@ const CLOSED_EYES_URL = new URL('./assets/nuoji-closed-eyes-v2.png', import.meta
 const LYING_GREEN_URL = new URL('./assets/nuoji-lying-green-v1.png', import.meta.url).href;
 const BALL_GREEN_URL = new URL('./assets/nuoji-ball-green-v1.png', import.meta.url).href;
 const WALK_GREEN_URL = new URL('./assets/nuoji-walk-green-v1.png', import.meta.url).href;
-const WALK_GREEN_ALT_URL = new URL('./assets/nuoji-walk-green-v2.png', import.meta.url).href;
+const WALK_LAYER_URLS = Object.freeze({
+    body: new URL('./assets/nuoji-walk-body-v1.png', import.meta.url).href,
+    frontNear: new URL('./assets/nuoji-walk-leg-front-near-v1.png', import.meta.url).href,
+    frontFar: new URL('./assets/nuoji-walk-leg-front-far-v1.png', import.meta.url).href,
+    hindNear: new URL('./assets/nuoji-walk-leg-hind-near-v1.png', import.meta.url).href,
+    hindFar: new URL('./assets/nuoji-walk-leg-hind-far-v1.png', import.meta.url).href,
+});
+const WALK_LEGS = Object.freeze([
+    { name: 'frontFar', pivot: { x: 450, y: 720 }, offset: Math.PI, amplitude: 0.17 },
+    { name: 'hindFar', pivot: { x: 850, y: 710 }, offset: 0, amplitude: 0.15 },
+    { name: 'frontNear', pivot: { x: 370, y: 700 }, offset: 0, amplitude: 0.19 },
+    { name: 'hindNear', pivot: { x: 700, y: 710 }, offset: Math.PI, amplitude: 0.16 },
+]);
 const CLOSED_EYES_SOURCE = Object.freeze({ x: 305, y: 290, width: 305, height: 190 });
 const TAIL_PIVOT = Object.freeze({ x: 690, y: 760 });
 const LEFT_EAR_PIVOT = Object.freeze({ x: 270, y: 360 });
@@ -103,10 +115,12 @@ export class NuojiRenderer {
         this.ballReady = false;
         this.ballLoading = false;
         this.walkImage = null;
-        this.walkImageAlt = null;
+        this.walkLayers = { body: null, frontNear: null, frontFar: null, hindNear: null, hindFar: null };
+        this.walkLayersReady = false;
         this.walkReady = false;
         this.walkLoading = false;
         this.walkDirection = -1;
+        this.walkPhase = 0;
         this.requestedForm = 'sitting';
         this.formWeights = { sitting: 1, lying: 0, ball: 0, walking: 0 };
         this.formTransitionFrom = { ...this.formWeights };
@@ -253,43 +267,62 @@ export class NuojiRenderer {
             return;
         }
         this.walkLoading = true;
-        let remaining = 2;
+        let remaining = Object.keys(WALK_LAYER_URLS).length;
+        let failed = false;
         const finish = () => {
             remaining -= 1;
             if (remaining > 0) {
                 return;
             }
-            // One surviving plate is still a safe fallback; two plates make
-            // the paws visibly alternate instead of sliding over the page.
-            this.walkImage ??= this.walkImageAlt;
-            this.walkImageAlt ??= this.walkImage;
+            this.walkLayersReady = !failed && Object.values(this.walkLayers).every(Boolean);
+            if (this.walkLayersReady) {
+                this.walkReady = true;
+                this.walkLoading = false;
+                if (this.requestedForm === 'walking') {
+                    this.setForm('walking');
+                }
+                this.draw(performance.now());
+                return;
+            }
+            console.warn('[Nuoji Pet] Walking layers failed to load; using the still walking fallback.');
+            this.loadWalkFallback();
+        };
+
+        for (const [name, url] of Object.entries(WALK_LAYER_URLS)) {
+            const image = new Image();
+            image.decoding = 'async';
+            image.addEventListener('load', () => {
+                this.walkLayers[name] = image;
+                finish();
+            }, { once: true });
+            image.addEventListener('error', () => {
+                failed = true;
+                this.walkLayers[name] = null;
+                finish();
+            }, { once: true });
+            image.src = url;
+        }
+    }
+
+    loadWalkFallback() {
+        const image = new Image();
+        image.decoding = 'async';
+        image.addEventListener('load', () => {
+            this.walkImage = this.removeGreenScreen(image);
             this.walkReady = Boolean(this.walkImage);
             this.walkLoading = false;
             if (this.requestedForm === 'walking' && this.walkReady) {
                 this.setForm('walking');
             }
-            if (!this.walkReady) {
-                console.warn('[Nuoji Pet] Walking poses failed to load; keeping the sitting pose.');
-            }
             this.draw(performance.now());
-        };
-
-        for (const [property, url] of [
-            ['walkImage', WALK_GREEN_URL],
-            ['walkImageAlt', WALK_GREEN_ALT_URL],
-        ]) {
-            const image = new Image();
-            image.decoding = 'async';
-            image.addEventListener('load', () => {
-                this[property] = this.removeGreenScreen(image);
-                finish();
-            }, { once: true });
-            image.addEventListener('error', () => {
-                this[property] = null;
-                finish();
-            }, { once: true });
-            image.src = url;
-        }
+        }, { once: true });
+        image.addEventListener('error', () => {
+            this.walkImage = null;
+            this.walkReady = false;
+            this.walkLoading = false;
+            console.warn('[Nuoji Pet] Walking fallback failed to load; keeping the sitting pose.');
+        }, { once: true });
+        image.src = WALK_GREEN_URL;
     }
 
     removeGreenScreen(image) {
@@ -420,6 +453,11 @@ export class NuojiRenderer {
         this.draw(performance.now());
     }
 
+    setWalkProgress(traveledPixels, strideLengthPixels) {
+        const stride = Math.max(1, Number(strideLengthPixels) || 1);
+        this.walkPhase = Math.max(0, Number(traveledPixels) || 0) / stride * Math.PI * 2;
+    }
+
     setReducedMotion(enabled) {
         this.reducedMotion = Boolean(enabled);
         this.draw(performance.now());
@@ -462,7 +500,8 @@ export class NuojiRenderer {
         this.lyingImage = null;
         this.ballImage = null;
         this.walkImage = null;
-        this.walkImageAlt = null;
+        this.walkLayers = { body: null, frontNear: null, frontFar: null, hindNear: null, hindFar: null };
+        this.walkLayersReady = false;
     }
 
     handleVisibilityChange() {
@@ -696,22 +735,18 @@ export class NuojiRenderer {
             ctx.restore();
         }
 
-        if (walkingBlend > 0.001 && this.walkImage) {
-            const gaitFrame = still || Math.floor(seconds * 4.6) % 2 === 0
-                ? this.walkImage
-                : (this.walkImageAlt || this.walkImage);
+        if (walkingBlend > 0.001 && (this.walkLayersReady || this.walkImage)) {
+            const gaitFrame = this.walkLayersReady ? this.walkLayers.body : this.walkImage;
             const walkNaturalWidth = gaitFrame.naturalWidth || gaitFrame.width;
             const walkNaturalHeight = gaitFrame.naturalHeight || gaitFrame.height;
             const walkFitScale = Math.min(465 / walkNaturalWidth, 382 / walkNaturalHeight);
             const walkWidth = walkNaturalWidth * walkFitScale;
             const walkHeight = walkNaturalHeight * walkFitScale;
-            const stride = still ? 0 : seconds * Math.PI * 4.6;
-            const step = Math.abs(Math.sin(stride));
-            // The two leg poses carry the gait. Keep the torso almost level so
-            // she walks rather than hovering up and down like a paper cutout.
-            const bob = step * 1.6;
-            const lean = still ? 0 : Math.sin(stride) * 0.006 * this.walkDirection;
-            const squash = still ? 0 : step * 0.004;
+            const phase = still ? 0 : this.walkPhase;
+            const step = Math.abs(Math.sin(phase));
+            const bob = step * 2;
+            const lean = still ? 0 : Math.sin(phase) * 0.004 * this.walkDirection;
+            const squash = still ? 0 : step * 0.003;
             ctx.save();
             ctx.globalAlpha = alpha * walkingBlend;
             // The production plate has generous green-key margin below the paws.
@@ -721,7 +756,27 @@ export class NuojiRenderer {
             // The production plate faces left. Mirror it only while travelling right.
             ctx.scale(-this.walkDirection, 1);
             ctx.scale(1 + squash, 1 - squash * 0.7);
-            ctx.drawImage(gaitFrame, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
+            if (this.walkLayersReady) {
+                for (const leg of WALK_LEGS) {
+                    const legPhase = phase + leg.offset;
+                    const swing = Math.sin(legPhase);
+                    const lift = still ? 0 : Math.max(0, swing) * 6;
+                    const pivotX = -walkWidth / 2 + leg.pivot.x * walkFitScale;
+                    const pivotY = -walkHeight + leg.pivot.y * walkFitScale;
+                    ctx.save();
+                    ctx.translate(0, -lift);
+                    ctx.translate(pivotX, pivotY);
+                    ctx.rotate(swing * leg.amplitude);
+                    ctx.translate(-pivotX, -pivotY);
+                    ctx.drawImage(this.walkLayers[leg.name], -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
+                    ctx.restore();
+                }
+                // One immutable head/body/tail plate sits above all four leg
+                // roots, so the face and silhouette never jump between frames.
+                ctx.drawImage(this.walkLayers.body, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
+            } else {
+                ctx.drawImage(gaitFrame, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
+            }
             ctx.restore();
         }
 
