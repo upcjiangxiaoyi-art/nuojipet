@@ -20,6 +20,8 @@ const UNDERPAINT_LAYER_URL = new URL('./assets/nuoji-underpaint-v1.png', import.
 const LEFT_EAR_LAYER_URL = new URL('./assets/nuoji-ear-left-v1.png', import.meta.url).href;
 const RIGHT_EAR_LAYER_URL = new URL('./assets/nuoji-ear-right-v1.png', import.meta.url).href;
 const CLOSED_EYES_URL = new URL('./assets/nuoji-closed-eyes-v2.png', import.meta.url).href;
+const LYING_GREEN_URL = new URL('./assets/nuoji-lying-green-v1.png', import.meta.url).href;
+const BALL_GREEN_URL = new URL('./assets/nuoji-ball-green-v1.png', import.meta.url).href;
 const CLOSED_EYES_SOURCE = Object.freeze({ x: 305, y: 290, width: 305, height: 190 });
 const TAIL_PIVOT = Object.freeze({ x: 690, y: 760 });
 const LEFT_EAR_PIVOT = Object.freeze({ x: 270, y: 360 });
@@ -92,6 +94,18 @@ export class NuojiRenderer {
         this.layersFailed = false;
         this.closedEyesImage = null;
         this.closedEyesReady = false;
+        this.lyingImage = null;
+        this.lyingReady = false;
+        this.lyingLoading = false;
+        this.ballImage = null;
+        this.ballReady = false;
+        this.ballLoading = false;
+        this.requestedForm = 'sitting';
+        this.formWeights = { sitting: 1, lying: 0, ball: 0 };
+        this.formTransitionFrom = { ...this.formWeights };
+        this.formTransitionTarget = { ...this.formWeights };
+        this.formTransitionStartedAt = 0;
+        this.formTransitionDuration = 460;
         this.boundLoop = this.loop.bind(this);
         this.boundVisibilityChange = this.handleVisibilityChange.bind(this);
 
@@ -177,6 +191,89 @@ export class NuojiRenderer {
         image.src = CLOSED_EYES_URL;
     }
 
+    loadLyingSkin() {
+        if (this.lyingReady || this.lyingLoading) {
+            return;
+        }
+        this.lyingLoading = true;
+        const image = new Image();
+        image.decoding = 'async';
+        image.addEventListener('load', () => {
+            this.lyingImage = this.removeGreenScreen(image);
+            this.lyingReady = Boolean(this.lyingImage);
+            this.lyingLoading = false;
+            if (this.requestedForm === 'lying') {
+                this.setForm('lying');
+            }
+            this.draw(performance.now());
+        }, { once: true });
+        image.addEventListener('error', () => {
+            this.lyingImage = null;
+            this.lyingReady = false;
+            this.lyingLoading = false;
+            console.warn('[Nuoji Pet] Lying pose failed to load; keeping the sitting pose.');
+        }, { once: true });
+        image.src = LYING_GREEN_URL;
+    }
+
+    loadBallSkin() {
+        if (this.ballReady || this.ballLoading) {
+            return;
+        }
+        this.ballLoading = true;
+        const image = new Image();
+        image.decoding = 'async';
+        image.addEventListener('load', () => {
+            this.ballImage = this.removeGreenScreen(image);
+            this.ballReady = Boolean(this.ballImage);
+            this.ballLoading = false;
+            if (this.requestedForm === 'ball') {
+                this.setForm('ball');
+            }
+            this.draw(performance.now());
+        }, { once: true });
+        image.addEventListener('error', () => {
+            this.ballImage = null;
+            this.ballReady = false;
+            this.ballLoading = false;
+            console.warn('[Nuoji Pet] Ball pose failed to load; keeping the sitting pose.');
+        }, { once: true });
+        image.src = BALL_GREEN_URL;
+    }
+
+    removeGreenScreen(image) {
+        const canvas = document.createElement('canvas');
+        canvas.width = image.naturalWidth || image.width;
+        canvas.height = image.naturalHeight || image.height;
+        const context = canvas.getContext('2d', { alpha: true, willReadFrequently: true });
+        if (!context?.getImageData || !context?.putImageData) {
+            // Test and very old canvas shims may not expose pixel writes. The
+            // production browsers supported by SillyTavern do.
+            return image;
+        }
+
+        context.drawImage(image, 0, 0);
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+        const data = pixels.data;
+        for (let index = 0; index < data.length; index += 4) {
+            const red = data[index];
+            const green = data[index + 1];
+            const blue = data[index + 2];
+            const dominance = green - Math.max(red, blue);
+            if (dominance > 0) {
+                data[index + 1] = Math.max(red, blue);
+            }
+            if (green < 70 || dominance < 8) {
+                continue;
+            }
+
+            const alpha = Math.max(0, Math.min(255, 255 - (dominance - 8) * 1.3));
+            data[index + 3] = Math.min(data[index + 3], alpha);
+        }
+        context.putImageData(pixels, 0, 0);
+        return canvas;
+    }
+
     resizeBackingStore() {
         const pixelRatio = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO);
         const size = Math.round(DESIGN_SIZE * pixelRatio);
@@ -201,6 +298,66 @@ export class NuojiRenderer {
         }
 
         this.draw(performance.now());
+    }
+
+    setForm(nextForm, { immediate = false } = {}) {
+        if (!['sitting', 'lying', 'ball'].includes(nextForm)) {
+            return;
+        }
+        this.requestedForm = nextForm;
+        if (nextForm === 'lying' && !this.lyingReady) {
+            this.loadLyingSkin();
+        } else if (nextForm === 'ball' && !this.ballReady) {
+            this.loadBallSkin();
+        }
+        const now = performance.now();
+        const current = this.currentFormWeights(now);
+        const availableForm = nextForm === 'lying' && !this.lyingReady
+            || nextForm === 'ball' && !this.ballReady
+            ? 'sitting'
+            : nextForm;
+        const target = {
+            sitting: availableForm === 'sitting' ? 1 : 0,
+            lying: availableForm === 'lying' ? 1 : 0,
+            ball: availableForm === 'ball' ? 1 : 0,
+        };
+        if (Object.keys(target).every((form) => Math.abs(current[form] - target[form]) < 0.001)) {
+            this.formWeights = target;
+            this.formTransitionFrom = { ...target };
+            this.formTransitionTarget = { ...target };
+            return;
+        }
+
+        this.formTransitionFrom = { ...current };
+        this.formTransitionTarget = { ...target };
+        this.formTransitionStartedAt = now;
+        this.formTransitionDuration = immediate ? 1 : 460;
+        this.draw(now);
+    }
+
+    currentFormWeights(now) {
+        const progress = Math.min(1, Math.max(0, (now - this.formTransitionStartedAt) / this.formTransitionDuration));
+        const eased = progress * progress * (3 - 2 * progress);
+        const weights = {};
+        for (const form of ['sitting', 'lying', 'ball']) {
+            weights[form] = this.formTransitionFrom[form]
+                + (this.formTransitionTarget[form] - this.formTransitionFrom[form]) * eased;
+        }
+        this.formWeights = weights;
+        if (progress >= 1) {
+            this.formTransitionFrom = { ...this.formTransitionTarget };
+            this.formWeights = { ...this.formTransitionTarget };
+        }
+        return this.formWeights;
+    }
+
+    currentForm(now = performance.now()) {
+        const weights = this.currentFormWeights(now);
+        return Object.entries(weights).sort((a, b) => b[1] - a[1])[0][0];
+    }
+
+    currentFormBlend(now) {
+        return this.currentFormWeights(now).lying;
     }
 
     setReducedMotion(enabled) {
@@ -242,6 +399,8 @@ export class NuojiRenderer {
     destroy() {
         this.stop();
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.lyingImage = null;
+        this.ballImage = null;
     }
 
     handleVisibilityChange() {
@@ -340,6 +499,10 @@ export class NuojiRenderer {
         const streamPulse = !still && now < this.pulseUntil
             ? Math.sin((this.pulseUntil - now) / 260 * Math.PI)
             : 0;
+        const formWeights = this.currentFormWeights(now);
+        const sittingBlend = formWeights.sitting;
+        const lyingBlend = this.lyingReady ? formWeights.lying : 0;
+        const ballBlend = this.ballReady ? formWeights.ball : 0;
 
         let offsetX = 0;
         let offsetY = 0;
@@ -410,7 +573,8 @@ export class NuojiRenderer {
 
         ctx.save();
         ctx.globalAlpha = 0.13;
-        ellipse(ctx, 251, 469, 139, 13, '#1d2832');
+        const shadowRadius = 139 * sittingBlend + 193 * lyingBlend + 112 * ballBlend;
+        ellipse(ctx, 251, 469, shadowRadius, 13 - ballBlend * 2, '#1d2832');
         ctx.restore();
 
         const referenceImage = this.layersReady ? this.layerImages.body : this.skinImage;
@@ -420,18 +584,54 @@ export class NuojiRenderer {
         const drawWidth = naturalWidth * fitScale;
         const drawHeight = naturalHeight * fitScale;
 
-        ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.translate(250 + offsetX, 468 + offsetY);
-        ctx.rotate(rotation);
-        ctx.scale(scaleX, scaleY);
-        if (this.layersReady) {
-            this.drawLayeredSkin(ctx, seconds, still, naturalWidth, drawWidth, drawHeight);
-        } else {
-            ctx.drawImage(this.skinImage, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+        if (sittingBlend > 0.001) {
+            ctx.save();
+            ctx.globalAlpha = alpha * sittingBlend;
+            ctx.translate(250 + offsetX, 468 + offsetY + (1 - sittingBlend) * 18);
+            ctx.rotate(rotation * sittingBlend);
+            ctx.scale(scaleX, scaleY * (0.92 + sittingBlend * 0.08));
+            if (this.layersReady) {
+                this.drawLayeredSkin(ctx, seconds, still, naturalWidth, drawWidth, drawHeight);
+            } else {
+                ctx.drawImage(this.skinImage, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+            }
+            this.drawClosedEyesOverlay(ctx, now, naturalWidth, drawWidth, drawHeight);
+            ctx.restore();
         }
-        this.drawClosedEyesOverlay(ctx, now, naturalWidth, drawWidth, drawHeight);
-        ctx.restore();
+
+        if (lyingBlend > 0.001 && this.lyingImage) {
+            const lyingNaturalWidth = this.lyingImage.naturalWidth || this.lyingImage.width;
+            const lyingNaturalHeight = this.lyingImage.naturalHeight || this.lyingImage.height;
+            const lyingFitScale = Math.min(470 / lyingNaturalWidth, 382 / lyingNaturalHeight);
+            const lyingWidth = lyingNaturalWidth * lyingFitScale;
+            const lyingHeight = lyingNaturalHeight * lyingFitScale;
+            const lyingBreath = still ? 0 : Math.sin(seconds * 1.8) * 0.004;
+            ctx.save();
+            ctx.globalAlpha = alpha * lyingBlend;
+            ctx.translate(250, 468 + (1 - lyingBlend) * 16);
+            ctx.scale(1 - (1 - lyingBlend) * 0.04, 0.94 + lyingBlend * 0.06 + lyingBreath);
+            ctx.drawImage(this.lyingImage, -lyingWidth / 2, -lyingHeight, lyingWidth, lyingHeight);
+            ctx.restore();
+        }
+
+        if (ballBlend > 0.001 && this.ballImage) {
+            const ballNaturalWidth = this.ballImage.naturalWidth || this.ballImage.width;
+            const ballNaturalHeight = this.ballImage.naturalHeight || this.ballImage.height;
+            const ballFitScale = Math.min(374 / ballNaturalWidth, 374 / ballNaturalHeight);
+            const ballWidth = ballNaturalWidth * ballFitScale;
+            const ballHeight = ballNaturalHeight * ballFitScale;
+            const rolling = still ? 0 : Math.sin(seconds * 4.6) * 0.12;
+            const tokenKick = streamPulse * 0.075;
+            const hop = still ? 0 : Math.abs(Math.sin(seconds * 4.6)) * 3.2;
+            ctx.save();
+            ctx.globalAlpha = alpha * ballBlend;
+            ctx.translate(250, 506 - ballHeight / 2 - hop + (1 - ballBlend) * 14);
+            ctx.rotate((rolling + tokenKick) * ballBlend);
+            const squash = still ? 0 : Math.abs(Math.sin(seconds * 4.6)) * 0.012;
+            ctx.scale(1 + squash, 1 - squash);
+            ctx.drawImage(this.ballImage, -ballWidth / 2, -ballHeight / 2, ballWidth, ballHeight);
+            ctx.restore();
+        }
 
         this.drawPaintedAccents(ctx, seconds, still);
     }

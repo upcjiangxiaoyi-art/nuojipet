@@ -14,6 +14,7 @@ const DOUBLE_TAP_RADIUS = 42;
 const LONG_PRESS_DURATION = 600;
 const TYPING_IDLE_DELAY = 3000;
 const THINKING_COMPANION_DELAY = 20000;
+const AUTO_LIE_DELAY = 28000;
 const GENERATION_SETTLE_DELAY = 520;
 const SEND_BUTTON_SELECTOR = '#send_but';
 const STOP_BUTTON_SELECTOR = '#mes_stop';
@@ -76,6 +77,7 @@ let typingAttentionActive = false;
 let thinkingBubble20Timer;
 let thinkingBubble40Timer;
 let thinkingCompanionMessage = '让我想想…';
+let poseTimer;
 
 const cleanups = [];
 
@@ -493,8 +495,12 @@ function applyVisualSettings({ reposition = false } = {}) {
     ui.root.classList.toggle('is-disabled', !settings.enabled);
     if (settings.enabled) {
         renderer?.start();
+        if (renderer?.state === PET_STATES.IDLE) {
+            scheduleAutoLie();
+        }
     } else {
         renderer?.stop();
+        clearPoseTimer();
         hideBubble();
         window.clearTimeout(reactionTimer);
     }
@@ -602,6 +608,7 @@ function handlePointerDown(event) {
     }
 
     event.stopImmediatePropagation();
+    wakeNuoji();
     const rect = ui.root.getBoundingClientRect();
     drag.active = true;
     drag.moved = false;
@@ -837,6 +844,31 @@ function petNuoji() {
     });
 }
 
+function clearPoseTimer() {
+    window.clearTimeout(poseTimer);
+    poseTimer = undefined;
+}
+
+function wakeNuoji() {
+    clearPoseTimer();
+    renderer?.setForm('sitting');
+}
+
+function scheduleAutoLie() {
+    clearPoseTimer();
+    if (isGenerating || typingAttentionActive || drag.active || !settings?.enabled) {
+        return;
+    }
+    poseTimer = window.setTimeout(() => {
+        poseTimer = undefined;
+        if (isGenerating || typingAttentionActive || drag.active || renderer?.state !== PET_STATES.IDLE) {
+            return;
+        }
+        renderer.setForm('lying');
+        showBubble('趴一会儿陪你～', 1600);
+    }, AUTO_LIE_DELAY);
+}
+
 function transitionTo(state, {
     duration = 0,
     bubble = '',
@@ -853,6 +885,15 @@ function transitionTo(state, {
     }
 
     window.clearTimeout(reactionTimer);
+    if (state === PET_STATES.THINKING) {
+        clearPoseTimer();
+        renderer.setForm('ball');
+    } else if (state === PET_STATES.SLEEPING) {
+        clearPoseTimer();
+        renderer.setForm('lying');
+    } else if (state !== PET_STATES.IDLE) {
+        wakeNuoji();
+    }
     currentPriority = priority;
     priorityUntil = duration > 0 ? now + duration : Number.POSITIVE_INFINITY;
     renderer.setState(state);
@@ -873,13 +914,20 @@ function returnToAmbient() {
     priorityUntil = 0;
 
     const ambientState = isGenerating ? PET_STATES.THINKING : PET_STATES.IDLE;
+    if (isGenerating) {
+        renderer?.setForm('ball');
+    }
     renderer?.setState(ambientState);
     ui?.root.setAttribute('aria-label', stateLabels[ambientState]);
 
     if (isGenerating) {
         showBubble(thinkingCompanionMessage, 0);
     } else {
+        if (renderer?.currentForm(performance.now()) === 'ball') {
+            renderer.setForm('sitting');
+        }
         hideBubble();
+        scheduleAutoLie();
     }
 }
 
@@ -978,6 +1026,7 @@ function setSignalStatus(message, source = '') {
 function beginThinking(source = 'event') {
     clearTypingAttention();
     clearPendingTap();
+    wakeNuoji();
     isGenerating = true;
     setSignalStatus('已收到发送，正在等回信', typeof source === 'string' ? source : 'event');
     clearGenerationFinishTimer();
@@ -1362,6 +1411,7 @@ export function destroy() {
     clearTypingAttention();
     clearLongPressTimer();
     clearPendingTap();
+    clearPoseTimer();
     window.cancelAnimationFrame(chatActivityFrame);
     window.cancelAnimationFrame(generationControlFrame);
     renderer?.destroy();
@@ -1400,6 +1450,7 @@ export function destroy() {
     isGenerating = false;
     publicApi = undefined;
     clickGuard = undefined;
+    poseTimer = undefined;
     drag.active = false;
     drag.moved = false;
     drag.pointerId = null;
@@ -1456,6 +1507,7 @@ async function initialize() {
             status() {
                 return Object.freeze({
                     state: renderer?.state,
+                    form: renderer?.currentForm(performance.now()),
                     isGenerating,
                     signal: lastSignalStatus,
                     generationControlActive,
@@ -1465,6 +1517,20 @@ async function initialize() {
                 window.dispatchEvent(new CustomEvent('nuoji:react', {
                     detail: { state, message, duration },
                 }));
+            },
+            lieDown() {
+                clearPoseTimer();
+                renderer?.setForm('lying');
+                showBubble('趴趴～', 1200);
+            },
+            sitUp() {
+                wakeNuoji();
+            },
+            rollUp() {
+                clearPoseTimer();
+                renderer?.setForm('ball');
+                renderer?.setState(PET_STATES.THINKING);
+                showBubble('咕噜噜～', 1200);
             },
         });
         window.NuojiPet = publicApi;

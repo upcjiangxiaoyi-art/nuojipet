@@ -103,7 +103,7 @@
         </section>
         <section class="controls">
             <h1>糯叽动作检查台</h1>
-            <p>这是独立预览，不需要启动 SillyTavern。点按钮检查首版的八种状态。</p>
+            <p>这是独立预览，不需要启动 SillyTavern。“想一想”检查滚动团子，“困嘟嘟”检查趴姿，其余按钮唤醒坐姿。</p>
             <div class="buttons">
                 <button data-state="idle">陪伴</button>
                 <button data-state="listening">听你说</button>
@@ -129,6 +129,11 @@
         renderer.start();
 
         const setState = (state) => {
+            renderer.setForm(
+                state === PET_STATES.SLEEPING
+                    ? 'lying'
+                    : state === PET_STATES.THINKING ? 'ball' : 'sitting',
+            );
             renderer.setState(state);
             document.querySelectorAll('[data-state]').forEach((button) => {
                 button.classList.toggle('is-active', button.dataset.state === state);
@@ -147,4 +152,3 @@
     </script>
 </body>
 </html>
-
