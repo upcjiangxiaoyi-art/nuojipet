@@ -14,6 +14,8 @@ const DESIGN_SIZE = 500;
 // that size while avoiding a 1000 x 1000 redraw on high-DPR iPhones.
 const MAX_PIXEL_RATIO = 1.5;
 const SKIN_URL = new URL('./assets/nuoji-base-v1.png', import.meta.url).href;
+const CLOSED_EYES_URL = new URL('./assets/nuoji-closed-eyes-v1.png', import.meta.url).href;
+const CLOSED_EYES_SOURCE = Object.freeze({ x: 305, y: 290, width: 305, height: 190 });
 
 function ellipse(ctx, x, y, radiusX, radiusY, fillStyle) {
     ctx.beginPath();
@@ -77,11 +79,14 @@ export class NuojiRenderer {
         this.skinImage = null;
         this.skinReady = false;
         this.skinFailed = false;
+        this.closedEyesImage = null;
+        this.closedEyesReady = false;
         this.boundLoop = this.loop.bind(this);
         this.boundVisibilityChange = this.handleVisibilityChange.bind(this);
 
         this.resizeBackingStore();
         this.loadSkin();
+        this.loadClosedEyes();
     }
 
     loadSkin() {
@@ -101,6 +106,23 @@ export class NuojiRenderer {
             this.draw(performance.now());
         }, { once: true });
         image.src = SKIN_URL;
+    }
+
+    loadClosedEyes() {
+        const image = new Image();
+        image.decoding = 'async';
+        image.addEventListener('load', () => {
+            this.closedEyesImage = image;
+            this.closedEyesReady = true;
+            this.draw(performance.now());
+        }, { once: true });
+        image.addEventListener('error', () => {
+            this.closedEyesImage = null;
+            this.closedEyesReady = false;
+            console.warn('[Nuoji Pet] Closed-eye skin failed to load; keeping Nuoji\'s eyes open.');
+            this.draw(performance.now());
+        }, { once: true });
+        image.src = CLOSED_EYES_URL;
     }
 
     resizeBackingStore() {
@@ -338,7 +360,7 @@ export class NuojiRenderer {
         ctx.rotate(rotation);
         ctx.scale(scaleX, scaleY);
         ctx.drawImage(this.skinImage, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
-        this.drawBlinkOverlay(ctx, now, naturalWidth, drawWidth, drawHeight);
+        this.drawClosedEyesOverlay(ctx, now, naturalWidth, drawWidth, drawHeight);
         ctx.restore();
 
         this.drawPaintedAccents(ctx, seconds, still);
@@ -363,81 +385,25 @@ export class NuojiRenderer {
         return Math.sin((phase / 0.16) * Math.PI);
     }
 
-    drawBlinkOverlay(ctx, now, naturalWidth, drawWidth, drawHeight) {
+    drawClosedEyesOverlay(ctx, now, naturalWidth, drawWidth, drawHeight) {
         const amount = this.blinkAmount(now);
-        if (amount <= 0.01) {
+        if (amount <= 0.01 || !this.closedEyesReady || !this.closedEyesImage) {
             return;
         }
 
         const sourceScale = drawWidth / naturalWidth;
         const sourceLeft = -drawWidth / 2;
         const sourceTop = -drawHeight;
-        const eyes = [
-            { x: 395, y: 411, radiusX: 50, radiusY: 27, rotation: 0.06, sampleY: 318, sampleHeight: 62 },
-            { x: 533, y: 376, radiusX: 45, radiusY: 27, rotation: -0.09, sampleY: 286, sampleHeight: 58 },
-        ];
 
         ctx.save();
-        // Copy Nuoji's own forehead fur over the eye instead of painting a flat
-        // grey oval. This keeps the closed lids textured and avoids the old
-        // "sunglasses" look while preserving one perfectly aligned base skin.
-        ctx.globalAlpha = Math.min(1, amount * 1.45);
-        for (const eye of eyes) {
-            const x = sourceLeft + eye.x * sourceScale;
-            const y = sourceTop + eye.y * sourceScale;
-            const radiusX = eye.radiusX * sourceScale;
-            const radiusY = eye.radiusY * sourceScale;
-
-            ctx.save();
-            ctx.translate(x, y);
-            ctx.rotate(eye.rotation);
-            ctx.beginPath();
-            ctx.moveTo(-radiusX, 0);
-            ctx.bezierCurveTo(
-                -radiusX * 0.58,
-                -radiusY,
-                radiusX * 0.58,
-                -radiusY,
-                radiusX,
-                0,
-            );
-            ctx.bezierCurveTo(
-                radiusX * 0.52,
-                radiusY * 0.82,
-                -radiusX * 0.52,
-                radiusY * 0.82,
-                -radiusX,
-                0,
-            );
-            ctx.closePath();
-            ctx.clip();
-            ctx.rotate(-eye.rotation);
-            ctx.translate(-x, -y);
-            ctx.drawImage(
-                this.skinImage,
-                eye.x - eye.radiusX,
-                eye.sampleY,
-                eye.radiusX * 2,
-                eye.sampleHeight,
-                x - radiusX,
-                y - radiusY,
-                radiusX * 2,
-                radiusY * 1.82,
-            );
-            ctx.restore();
-
-            ctx.save();
-            ctx.translate(x, y);
-            ctx.rotate(eye.rotation);
-            ctx.beginPath();
-            ctx.moveTo(-radiusX * 0.7, radiusY * 0.02);
-            ctx.quadraticCurveTo(0, radiusY * 0.3, radiusX * 0.7, radiusY * 0.02);
-            ctx.strokeStyle = 'rgba(91, 78, 88, 0.5)';
-            ctx.lineWidth = Math.max(1.1, 2.2 * sourceScale);
-            ctx.lineCap = 'round';
-            ctx.stroke();
-            ctx.restore();
-        }
+        ctx.globalAlpha *= Math.min(1, amount * 1.35);
+        ctx.drawImage(
+            this.closedEyesImage,
+            sourceLeft + CLOSED_EYES_SOURCE.x * sourceScale,
+            sourceTop + CLOSED_EYES_SOURCE.y * sourceScale,
+            CLOSED_EYES_SOURCE.width * sourceScale,
+            CLOSED_EYES_SOURCE.height * sourceScale,
+        );
         ctx.restore();
     }
 

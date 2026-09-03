@@ -9,6 +9,8 @@ const HIT_RADIUS_TOUCH = 14;
 const HIT_RADIUS_MOUSE = 3;
 const CLICK_GUARD_DURATION = 900;
 const CLICK_GUARD_RADIUS = 36;
+const SEND_BUTTON_SELECTOR = '#send_but';
+const STOP_BUTTON_SELECTOR = '#mes_stop';
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
@@ -48,7 +50,12 @@ let settingsLayerTimer;
 let generationWatchdog;
 let chatActivityFrame;
 let chatObserver;
+let generationControlFrame;
+let generationControlObserver;
+let generationControlActive = false;
+let generationWasManuallyStopped = false;
 let observedChatLength = 0;
+let lastSignalStatus = '待命，等你发消息';
 let currentPriority = 0;
 let priorityUntil = 0;
 let isGenerating = false;
@@ -751,9 +758,21 @@ function clearGenerationWatchdog() {
     generationWatchdog = undefined;
 }
 
-function beginThinking() {
+function setSignalStatus(message, source = '') {
+    lastSignalStatus = message;
+    const status = document.getElementById('nuoji-signal-status');
+    if (status) {
+        status.textContent = `联动状态：${message}`;
+    }
+    if (ui?.root && source) {
+        ui.root.dataset.signalSource = source;
+    }
+}
+
+function beginThinking(source = 'event') {
     const wasAlreadyThinking = isGenerating && renderer?.state === PET_STATES.THINKING;
     isGenerating = true;
+    setSignalStatus('已收到发送，正在等回信', typeof source === 'string' ? source : 'event');
     clearGenerationWatchdog();
     generationWatchdog = window.setTimeout(() => {
         if (!isGenerating) {
@@ -761,6 +780,7 @@ function beginThinking() {
         }
 
         isGenerating = false;
+        setSignalStatus('等待超时，已经回到陪伴');
         transitionTo(PET_STATES.CONFUSED, {
             duration: 1700,
             bubble: '唔，回信走丢了吗？',
@@ -779,6 +799,7 @@ function beginThinking() {
 function finishThinking(bubble = '回信来啦！') {
     clearGenerationWatchdog();
     isGenerating = false;
+    setSignalStatus('回复已到达');
     transitionTo(PET_STATES.HAPPY, {
         duration: 2100,
         bubble,
@@ -815,7 +836,7 @@ function inspectChatActivity() {
     // that render messages but skip one of SillyTavern's generation events.
     for (const entry of newEntries) {
         if (entry?.is_user === true) {
-            beginThinking();
+            beginThinking('chat-observer');
         } else if (entry?.is_user === false && isGenerating) {
             finishThinking();
         }
@@ -839,15 +860,107 @@ function bindChatActivityFallback() {
     cleanups.push(() => chatObserver?.disconnect());
 }
 
+function closestSignalControl(target, selector) {
+    if (typeof target?.closest === 'function') {
+        return target.closest(selector);
+    }
+    return target?.id === selector.slice(1) ? target : null;
+}
+
+function controlIsVisible(element) {
+    if (!element || element.classList?.contains('displayNone') || element.hidden) {
+        return false;
+    }
+
+    const styles = window.getComputedStyle(element);
+    return styles.display !== 'none' && styles.visibility !== 'hidden' && styles.opacity !== '0';
+}
+
+function handleDirectGenerationControl(event) {
+    const sendButton = closestSignalControl(event.target, SEND_BUTTON_SELECTOR);
+    if (sendButton) {
+        const textarea = document.getElementById('send_textarea');
+        if (!textarea || String(textarea.value ?? '').trim()) {
+            beginThinking('send-button');
+        }
+        return;
+    }
+
+    if (closestSignalControl(event.target, STOP_BUTTON_SELECTOR)) {
+        generationWasManuallyStopped = true;
+    }
+}
+
+function syncGenerationControls() {
+    generationControlFrame = undefined;
+    const nextActive = controlIsVisible(document.getElementById('mes_stop'));
+
+    if (nextActive && !generationControlActive) {
+        generationWasManuallyStopped = false;
+        beginThinking('stop-button');
+    } else if (!nextActive && generationControlActive && isGenerating) {
+        if (generationWasManuallyStopped) {
+            clearGenerationWatchdog();
+            isGenerating = false;
+            setSignalStatus('生成已手动停止');
+            transitionTo(PET_STATES.CONFUSED, {
+                duration: 1700,
+                bubble: '停在这里嘛？',
+                priority: 35,
+                force: true,
+            });
+        } else {
+            finishThinking();
+        }
+    }
+
+    generationControlActive = nextActive;
+}
+
+function scheduleGenerationControlSync() {
+    window.cancelAnimationFrame(generationControlFrame);
+    generationControlFrame = window.requestAnimationFrame(syncGenerationControls);
+}
+
+function bindDirectInputSignals() {
+    // Capture before SillyTavern clears the textarea or swaps Send for Stop.
+    on(document, 'pointerdown', handleDirectGenerationControl, { capture: true, passive: true });
+    on(document, 'click', handleDirectGenerationControl, { capture: true, passive: true });
+
+    const controls = [
+        document.getElementById('send_but'),
+        document.getElementById('mes_stop'),
+        document.getElementById('rightSendForm'),
+    ].filter(Boolean);
+
+    generationControlActive = controlIsVisible(document.getElementById('mes_stop'));
+    if (generationControlActive) {
+        beginThinking('stop-button');
+    }
+
+    if (controls.length && typeof MutationObserver === 'function') {
+        generationControlObserver = new MutationObserver(scheduleGenerationControlSync);
+        for (const control of controls) {
+            generationControlObserver.observe(control, {
+                attributes: true,
+                attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
+            });
+        }
+        cleanups.push(() => generationControlObserver?.disconnect());
+    }
+
+    setSignalStatus(lastSignalStatus);
+}
+
 function bindSillyTavernEvents() {
     // MESSAGE_SENT is the earliest normal send signal. USER_MESSAGE_RENDERED
     // covers input helpers that insert a message through the UI, while
     // GENERATION_AFTER_COMMANDS catches generation immediately after commands.
-    listen('MESSAGE_SENT', beginThinking);
-    listen('USER_MESSAGE_RENDERED', beginThinking);
-    listen('GENERATION_AFTER_COMMANDS', beginThinking);
+    listen('MESSAGE_SENT', () => beginThinking('MESSAGE_SENT'));
+    listen('USER_MESSAGE_RENDERED', () => beginThinking('USER_MESSAGE_RENDERED'));
+    listen('GENERATION_AFTER_COMMANDS', () => beginThinking('GENERATION_AFTER_COMMANDS'));
 
-    listen('GENERATION_STARTED', beginThinking);
+    listen('GENERATION_STARTED', () => beginThinking('GENERATION_STARTED'));
 
     listen('STREAM_TOKEN_RECEIVED', () => {
         renderer?.pulse();
@@ -866,6 +979,7 @@ function bindSillyTavernEvents() {
     listen('GENERATION_STOPPED', () => {
         clearGenerationWatchdog();
         isGenerating = false;
+        setSignalStatus('生成已手动停止');
         transitionTo(PET_STATES.CONFUSED, {
             duration: 1900,
             bubble: '停在这里嘛？',
@@ -877,6 +991,7 @@ function bindSillyTavernEvents() {
     listen('GENERATION_ENDED', () => {
         clearGenerationWatchdog();
         isGenerating = false;
+        setSignalStatus('生成已经结束');
         if (renderer?.state === PET_STATES.THINKING) {
             transitionTo(PET_STATES.CONFUSED, {
                 duration: 1500,
@@ -890,6 +1005,7 @@ function bindSillyTavernEvents() {
     listen('CHAT_CHANGED', () => {
         clearGenerationWatchdog();
         isGenerating = false;
+        setSignalStatus('已切换聊天，等待发送');
         resetObservedChatLength();
         transitionTo(PET_STATES.WAVE, {
             duration: 1700,
@@ -948,6 +1064,7 @@ export function destroy() {
     window.clearTimeout(settingsLayerTimer);
     clearGenerationWatchdog();
     window.cancelAnimationFrame(chatActivityFrame);
+    window.cancelAnimationFrame(generationControlFrame);
     renderer?.destroy();
     ui?.root?.remove();
     document.getElementById('nuoji-settings')?.remove();
@@ -971,7 +1088,12 @@ export function destroy() {
     generationWatchdog = undefined;
     chatActivityFrame = undefined;
     chatObserver = undefined;
+    generationControlFrame = undefined;
+    generationControlObserver = undefined;
+    generationControlActive = false;
+    generationWasManuallyStopped = false;
     observedChatLength = 0;
+    lastSignalStatus = '待命，等你发消息';
     currentPriority = 0;
     priorityUntil = 0;
     isGenerating = false;
@@ -1010,6 +1132,7 @@ async function initialize() {
         applyVisualSettings();
         applyStoredPosition();
         await createSettingsUi();
+        bindDirectInputSignals();
         bindSillyTavernEvents();
         bindChatActivityFallback();
         bindViewportEvents();
@@ -1026,6 +1149,14 @@ async function initialize() {
         publicApi = Object.freeze({
             states: PET_STATES,
             destroy,
+            status() {
+                return Object.freeze({
+                    state: renderer?.state,
+                    isGenerating,
+                    signal: lastSignalStatus,
+                    generationControlActive,
+                });
+            },
             react(state, message = '', duration = 1800) {
                 window.dispatchEvent(new CustomEvent('nuoji:react', {
                     detail: { state, message, duration },
