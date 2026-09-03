@@ -22,6 +22,7 @@ const RIGHT_EAR_LAYER_URL = new URL('./assets/nuoji-ear-right-v1.png', import.me
 const CLOSED_EYES_URL = new URL('./assets/nuoji-closed-eyes-v2.png', import.meta.url).href;
 const LYING_GREEN_URL = new URL('./assets/nuoji-lying-green-v1.png', import.meta.url).href;
 const BALL_GREEN_URL = new URL('./assets/nuoji-ball-green-v1.png', import.meta.url).href;
+const WALK_GREEN_URL = new URL('./assets/nuoji-walk-green-v1.png', import.meta.url).href;
 const CLOSED_EYES_SOURCE = Object.freeze({ x: 305, y: 290, width: 305, height: 190 });
 const TAIL_PIVOT = Object.freeze({ x: 690, y: 760 });
 const LEFT_EAR_PIVOT = Object.freeze({ x: 270, y: 360 });
@@ -100,8 +101,12 @@ export class NuojiRenderer {
         this.ballImage = null;
         this.ballReady = false;
         this.ballLoading = false;
+        this.walkImage = null;
+        this.walkReady = false;
+        this.walkLoading = false;
+        this.walkDirection = -1;
         this.requestedForm = 'sitting';
-        this.formWeights = { sitting: 1, lying: 0, ball: 0 };
+        this.formWeights = { sitting: 1, lying: 0, ball: 0, walking: 0 };
         this.formTransitionFrom = { ...this.formWeights };
         this.formTransitionTarget = { ...this.formWeights };
         this.formTransitionStartedAt = 0;
@@ -241,6 +246,31 @@ export class NuojiRenderer {
         image.src = BALL_GREEN_URL;
     }
 
+    loadWalkSkin() {
+        if (this.walkReady || this.walkLoading) {
+            return;
+        }
+        this.walkLoading = true;
+        const image = new Image();
+        image.decoding = 'async';
+        image.addEventListener('load', () => {
+            this.walkImage = this.removeGreenScreen(image);
+            this.walkReady = Boolean(this.walkImage);
+            this.walkLoading = false;
+            if (this.requestedForm === 'walking') {
+                this.setForm('walking');
+            }
+            this.draw(performance.now());
+        }, { once: true });
+        image.addEventListener('error', () => {
+            this.walkImage = null;
+            this.walkReady = false;
+            this.walkLoading = false;
+            console.warn('[Nuoji Pet] Walking pose failed to load; keeping the sitting pose.');
+        }, { once: true });
+        image.src = WALK_GREEN_URL;
+    }
+
     removeGreenScreen(image) {
         const canvas = document.createElement('canvas');
         canvas.width = image.naturalWidth || image.width;
@@ -301,7 +331,7 @@ export class NuojiRenderer {
     }
 
     setForm(nextForm, { immediate = false } = {}) {
-        if (!['sitting', 'lying', 'ball'].includes(nextForm)) {
+        if (!['sitting', 'lying', 'ball', 'walking'].includes(nextForm)) {
             return;
         }
         this.requestedForm = nextForm;
@@ -309,17 +339,21 @@ export class NuojiRenderer {
             this.loadLyingSkin();
         } else if (nextForm === 'ball' && !this.ballReady) {
             this.loadBallSkin();
+        } else if (nextForm === 'walking' && !this.walkReady) {
+            this.loadWalkSkin();
         }
         const now = performance.now();
         const current = this.currentFormWeights(now);
         const availableForm = nextForm === 'lying' && !this.lyingReady
             || nextForm === 'ball' && !this.ballReady
+            || nextForm === 'walking' && !this.walkReady
             ? 'sitting'
             : nextForm;
         const target = {
             sitting: availableForm === 'sitting' ? 1 : 0,
             lying: availableForm === 'lying' ? 1 : 0,
             ball: availableForm === 'ball' ? 1 : 0,
+            walking: availableForm === 'walking' ? 1 : 0,
         };
         if (Object.keys(target).every((form) => Math.abs(current[form] - target[form]) < 0.001)) {
             this.formWeights = target;
@@ -339,7 +373,7 @@ export class NuojiRenderer {
         const progress = Math.min(1, Math.max(0, (now - this.formTransitionStartedAt) / this.formTransitionDuration));
         const eased = progress * progress * (3 - 2 * progress);
         const weights = {};
-        for (const form of ['sitting', 'lying', 'ball']) {
+        for (const form of ['sitting', 'lying', 'ball', 'walking']) {
             weights[form] = this.formTransitionFrom[form]
                 + (this.formTransitionTarget[form] - this.formTransitionFrom[form]) * eased;
         }
@@ -358,6 +392,11 @@ export class NuojiRenderer {
 
     currentFormBlend(now) {
         return this.currentFormWeights(now).lying;
+    }
+
+    setWalkDirection(direction) {
+        this.walkDirection = Number(direction) >= 0 ? 1 : -1;
+        this.draw(performance.now());
     }
 
     setReducedMotion(enabled) {
@@ -401,6 +440,7 @@ export class NuojiRenderer {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this.lyingImage = null;
         this.ballImage = null;
+        this.walkImage = null;
     }
 
     handleVisibilityChange() {
@@ -503,6 +543,7 @@ export class NuojiRenderer {
         const sittingBlend = formWeights.sitting;
         const lyingBlend = this.lyingReady ? formWeights.lying : 0;
         const ballBlend = this.ballReady ? formWeights.ball : 0;
+        const walkingBlend = this.walkReady ? formWeights.walking : 0;
 
         let offsetX = 0;
         let offsetY = 0;
@@ -573,7 +614,7 @@ export class NuojiRenderer {
 
         ctx.save();
         ctx.globalAlpha = 0.13;
-        const shadowRadius = 139 * sittingBlend + 193 * lyingBlend + 112 * ballBlend;
+        const shadowRadius = 139 * sittingBlend + 193 * lyingBlend + 112 * ballBlend + 156 * walkingBlend;
         ellipse(ctx, 251, 469, shadowRadius, 13 - ballBlend * 2, '#1d2832');
         ctx.restore();
 
@@ -630,6 +671,30 @@ export class NuojiRenderer {
             const squash = still ? 0 : Math.abs(Math.sin(seconds * 4.6)) * 0.012;
             ctx.scale(1 + squash, 1 - squash);
             ctx.drawImage(this.ballImage, -ballWidth / 2, -ballHeight / 2, ballWidth, ballHeight);
+            ctx.restore();
+        }
+
+        if (walkingBlend > 0.001 && this.walkImage) {
+            const walkNaturalWidth = this.walkImage.naturalWidth || this.walkImage.width;
+            const walkNaturalHeight = this.walkImage.naturalHeight || this.walkImage.height;
+            const walkFitScale = Math.min(465 / walkNaturalWidth, 382 / walkNaturalHeight);
+            const walkWidth = walkNaturalWidth * walkFitScale;
+            const walkHeight = walkNaturalHeight * walkFitScale;
+            const stride = still ? 0 : seconds * 7.6;
+            const step = Math.abs(Math.sin(stride));
+            const bob = step * 5.2;
+            const lean = still ? 0 : Math.sin(stride) * 0.018 * this.walkDirection;
+            const squash = still ? 0 : step * 0.012;
+            ctx.save();
+            ctx.globalAlpha = alpha * walkingBlend;
+            // The production plate has generous green-key margin below the paws.
+            // Lower its canvas origin so the visible feet meet the shared ground line.
+            ctx.translate(250, 512 - bob + (1 - walkingBlend) * 14);
+            ctx.rotate(lean * walkingBlend);
+            // The production plate faces left. Mirror it only while travelling right.
+            ctx.scale(-this.walkDirection, 1);
+            ctx.scale(1 + squash, 1 - squash * 0.7);
+            ctx.drawImage(this.walkImage, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
             ctx.restore();
         }
 

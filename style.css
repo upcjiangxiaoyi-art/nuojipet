@@ -221,7 +221,8 @@ body:has(#nuoji-pet-root.is-dragging) {
     writing-mode: horizontal-tb !important;
 }
 
-#nuoji-settings #nuoji-reset-position {
+#nuoji-settings #nuoji-reset-position,
+#nuoji-settings #nuoji-preview-walk {
     display: inline-flex !important;
     width: auto !important;
     min-width: max-content !important;

@@ -103,7 +103,7 @@
         </section>
         <section class="controls">
             <h1>糯叽动作检查台</h1>
-            <p>这是独立预览，不需要启动 SillyTavern。“想一想”检查滚动团子，“困嘟嘟”检查趴姿，其余按钮唤醒坐姿。</p>
+            <p>这是独立预览，不需要启动 SillyTavern。“想一想”检查滚动团子，“困嘟嘟”检查趴姿，“走两步”检查左右镜像的小步姿势。</p>
             <div class="buttons">
                 <button data-state="idle">陪伴</button>
                 <button data-state="listening">听你说</button>
@@ -113,6 +113,8 @@
                 <button data-state="petting">摸摸</button>
                 <button data-state="sleeping">困嘟嘟</button>
                 <button data-state="wave">挥爪</button>
+                <button data-form="walking" data-direction="-1">向左走</button>
+                <button data-form="walking" data-direction="1">向右走</button>
             </div>
             <label>
                 <input id="reduce-motion" type="checkbox" />
@@ -142,6 +144,16 @@
 
         document.querySelectorAll('[data-state]').forEach((button) => {
             button.addEventListener('click', () => setState(button.dataset.state));
+        });
+
+        document.querySelectorAll('[data-form="walking"]').forEach((button) => {
+            button.addEventListener('click', () => {
+                renderer.setWalkDirection(Number(button.dataset.direction));
+                renderer.setForm('walking');
+                renderer.setState(PET_STATES.IDLE);
+                document.querySelectorAll('button').forEach((candidate) => candidate.classList.remove('is-active'));
+                button.classList.add('is-active');
+            });
         });
 
         document.getElementById('reduce-motion').addEventListener('change', (event) => {

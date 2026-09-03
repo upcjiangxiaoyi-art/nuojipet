@@ -15,6 +15,11 @@ const LONG_PRESS_DURATION = 600;
 const TYPING_IDLE_DELAY = 3000;
 const THINKING_COMPANION_DELAY = 20000;
 const AUTO_LIE_DELAY = 28000;
+const AUTO_WALK_MIN_DELAY = 42000;
+const AUTO_WALK_JITTER = 36000;
+const WALK_MIN_DISTANCE = 52;
+const WALK_MAX_DISTANCE = 92;
+const WALK_DURATION = 2300;
 const GENERATION_SETTLE_DELAY = 520;
 const SEND_BUTTON_SELECTOR = '#send_but';
 const STOP_BUTTON_SELECTOR = '#mes_stop';
@@ -78,6 +83,9 @@ let thinkingBubble20Timer;
 let thinkingBubble40Timer;
 let thinkingCompanionMessage = '让我想想…';
 let poseTimer;
+let roamTimer;
+let roamFrame;
+let roamRun;
 
 const cleanups = [];
 
@@ -377,6 +385,7 @@ function bindSettingsControls() {
     const reducedMotion = document.getElementById('nuoji-reduced-motion');
     const showBubble = document.getElementById('nuoji-show-bubble');
     const resetPosition = document.getElementById('nuoji-reset-position');
+    const previewWalk = document.getElementById('nuoji-preview-walk');
 
     if (enabled) {
         on(enabled, 'change', (event) => {
@@ -435,6 +444,12 @@ function bindSettingsControls() {
                 force: true,
             });
             saveSettings();
+        });
+    }
+
+    if (previewWalk) {
+        on(previewWalk, 'click', () => {
+            startAutoWalk(0, 1900, { announce: true });
         });
     }
 
@@ -497,10 +512,13 @@ function applyVisualSettings({ reposition = false } = {}) {
         renderer?.start();
         if (renderer?.state === PET_STATES.IDLE) {
             scheduleAutoLie();
+            scheduleAutoWalk();
         }
     } else {
         renderer?.stop();
         clearPoseTimer();
+        cancelAutoWalk({ settle: false });
+        clearAutoWalkTimer();
         hideBubble();
         window.clearTimeout(reactionTimer);
     }
@@ -849,8 +867,28 @@ function clearPoseTimer() {
     poseTimer = undefined;
 }
 
+function clearAutoWalkTimer() {
+    window.clearTimeout(roamTimer);
+    roamTimer = undefined;
+}
+
+function cancelAutoWalk({ settle = true, remember = true } = {}) {
+    window.cancelAnimationFrame(roamFrame);
+    roamFrame = undefined;
+    const wasWalking = Boolean(roamRun);
+    roamRun = undefined;
+    if (wasWalking && remember && ui?.root && settings) {
+        rememberCurrentPosition();
+    }
+    if (wasWalking && settle) {
+        renderer?.setForm('sitting');
+    }
+}
+
 function wakeNuoji() {
     clearPoseTimer();
+    clearAutoWalkTimer();
+    cancelAutoWalk({ settle: false });
     renderer?.setForm('sitting');
 }
 
@@ -867,6 +905,138 @@ function scheduleAutoLie() {
         renderer.setForm('lying');
         showBubble('趴一会儿陪你～', 1600);
     }, AUTO_LIE_DELAY);
+}
+
+function scheduleAutoWalk() {
+    clearAutoWalkTimer();
+    if (
+        isGenerating
+        || typingAttentionActive
+        || drag.active
+        || roamRun
+        || !settings?.enabled
+        || settings.reducedMotion
+    ) {
+        return;
+    }
+    const delay = AUTO_WALK_MIN_DELAY + Math.random() * AUTO_WALK_JITTER;
+    roamTimer = window.setTimeout(() => {
+        roamTimer = undefined;
+        startAutoWalk();
+    }, delay);
+}
+
+function chooseWalkTarget(preferredDirection = 0) {
+    const bounds = movementBounds();
+    const rect = ui.root.getBoundingClientRect();
+    const startLeft = clamp(
+        finiteNumber(Number.parseFloat(ui.root.style.left), rect.left),
+        bounds.minimumLeft,
+        bounds.maximumLeft,
+    );
+    const startTop = clamp(
+        finiteNumber(Number.parseFloat(ui.root.style.top), rect.top),
+        bounds.minimumTop,
+        bounds.maximumTop,
+    );
+    const roomLeft = startLeft - bounds.minimumLeft;
+    const roomRight = bounds.maximumLeft - startLeft;
+    let direction = Math.sign(preferredDirection);
+
+    if (!direction) {
+        if (roomLeft < WALK_MIN_DISTANCE && roomRight < WALK_MIN_DISTANCE) {
+            direction = roomRight >= roomLeft ? 1 : -1;
+        } else if (roomLeft < WALK_MIN_DISTANCE) {
+            direction = 1;
+        } else if (roomRight < WALK_MIN_DISTANCE) {
+            direction = -1;
+        } else {
+            direction = Math.random() < 0.5 ? -1 : 1;
+        }
+    }
+    if (direction < 0 && roomLeft < Math.min(WALK_MIN_DISTANCE, roomRight)) {
+        direction = 1;
+    } else if (direction > 0 && roomRight < Math.min(WALK_MIN_DISTANCE, roomLeft)) {
+        direction = -1;
+    }
+
+    const available = direction < 0 ? roomLeft : roomRight;
+    const requested = WALK_MIN_DISTANCE + Math.random() * (WALK_MAX_DISTANCE - WALK_MIN_DISTANCE);
+    const distance = Math.min(requested, available);
+    return {
+        startLeft,
+        startTop,
+        targetLeft: startLeft + direction * distance,
+        direction,
+        distance,
+    };
+}
+
+function startAutoWalk(preferredDirection = 0, duration = WALK_DURATION, { announce = false } = {}) {
+    if (!ui?.root || !renderer || !settings?.enabled || isGenerating || typingAttentionActive || drag.active) {
+        return false;
+    }
+    if (!announce && renderer.state !== PET_STATES.IDLE) {
+        scheduleAutoWalk();
+        return false;
+    }
+
+    clearPoseTimer();
+    clearAutoWalkTimer();
+    cancelAutoWalk({ settle: false });
+    window.clearTimeout(reactionTimer);
+    currentPriority = 0;
+    priorityUntil = 0;
+    const path = chooseWalkTarget(preferredDirection);
+    if (path.distance < 8) {
+        renderer.setForm('sitting');
+        scheduleAutoLie();
+        scheduleAutoWalk();
+        return false;
+    }
+
+    const safeDuration = clamp(finiteNumber(duration, WALK_DURATION), 600, 6000);
+    roamRun = { ...path, duration: safeDuration, startedAt: undefined };
+    renderer.setWalkDirection(path.direction);
+    renderer.setState(PET_STATES.IDLE);
+    renderer.setForm('walking');
+    ui.root.setAttribute('aria-label', '糯叽正在走过来陪你');
+    if (announce) {
+        showBubble('走两步陪你～', 1300);
+    }
+
+    const step = (now) => {
+        if (!roamRun) {
+            return;
+        }
+        if (roamRun.startedAt === undefined) {
+            roamRun.startedAt = now;
+        }
+        const progress = clamp((now - roamRun.startedAt) / roamRun.duration, 0, 1);
+        const eased = progress * progress * (3 - 2 * progress);
+        setPixelPosition(
+            roamRun.startLeft + (roamRun.targetLeft - roamRun.startLeft) * eased,
+            roamRun.startTop,
+        );
+        if (progress < 1) {
+            roamFrame = window.requestAnimationFrame(step);
+            return;
+        }
+
+        roamFrame = undefined;
+        roamRun = undefined;
+        rememberCurrentPosition();
+        renderer.setForm('sitting');
+        renderer.setState(PET_STATES.IDLE);
+        ui.root.setAttribute('aria-label', stateLabels[PET_STATES.IDLE]);
+        if (announce) {
+            showBubble('换个地方陪你～', 1200);
+        }
+        scheduleAutoLie();
+        scheduleAutoWalk();
+    };
+    roamFrame = window.requestAnimationFrame(step);
+    return true;
 }
 
 function transitionTo(state, {
@@ -891,7 +1061,7 @@ function transitionTo(state, {
     } else if (state === PET_STATES.SLEEPING) {
         clearPoseTimer();
         renderer.setForm('lying');
-    } else if (state !== PET_STATES.IDLE) {
+    } else {
         wakeNuoji();
     }
     currentPriority = priority;
@@ -928,6 +1098,7 @@ function returnToAmbient() {
         }
         hideBubble();
         scheduleAutoLie();
+        scheduleAutoWalk();
     }
 }
 
@@ -1412,6 +1583,8 @@ export function destroy() {
     clearLongPressTimer();
     clearPendingTap();
     clearPoseTimer();
+    clearAutoWalkTimer();
+    cancelAutoWalk({ settle: false, remember: false });
     window.cancelAnimationFrame(chatActivityFrame);
     window.cancelAnimationFrame(generationControlFrame);
     renderer?.destroy();
@@ -1451,6 +1624,9 @@ export function destroy() {
     publicApi = undefined;
     clickGuard = undefined;
     poseTimer = undefined;
+    roamTimer = undefined;
+    roamFrame = undefined;
+    roamRun = undefined;
     drag.active = false;
     drag.moved = false;
     drag.pointerId = null;
@@ -1531,6 +1707,9 @@ async function initialize() {
                 renderer?.setForm('ball');
                 renderer?.setState(PET_STATES.THINKING);
                 showBubble('咕噜噜～', 1200);
+            },
+            walk(direction = 0, duration = WALK_DURATION) {
+                return startAutoWalk(direction, duration, { announce: true });
             },
         });
         window.NuojiPet = publicApi;
