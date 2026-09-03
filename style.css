@@ -15,6 +15,8 @@
     outline: none;
     opacity: var(--nuoji-opacity);
     cursor: grab;
+    /* JavaScript claims painted pixels only; transparent corners stay click-through. */
+    pointer-events: none;
     touch-action: none;
     user-select: none;
     -webkit-user-select: none;
@@ -29,10 +31,23 @@
     display: none;
 }
 
+#nuoji-pet-root.is-settings-preview {
+    /* Only Nuoji's own open settings panel may temporarily lift her over the mobile drawer. */
+    z-index: 3006;
+}
+
 #nuoji-pet-root.is-pressed,
 #nuoji-pet-root.is-dragging {
     cursor: grabbing;
     filter: drop-shadow(0 13px 14px rgba(17, 25, 34, 0.26));
+}
+
+body:has(#nuoji-pet-root.is-hover) {
+    cursor: grab;
+}
+
+body:has(#nuoji-pet-root.is-dragging) {
+    cursor: grabbing;
 }
 
 #nuoji-pet-root:focus-visible {
@@ -109,7 +124,7 @@
     transition: opacity 150ms ease, transform 150ms ease;
 }
 
-#nuoji-pet-root:hover .nuoji-drag-hint,
+#nuoji-pet-root.is-hover .nuoji-drag-hint,
 #nuoji-pet-root:focus-visible .nuoji-drag-hint,
 #nuoji-pet-root.is-dragging .nuoji-drag-hint {
     opacity: 0.92;
@@ -173,11 +188,36 @@
     gap: 6px;
 }
 
-.nuoji-preview-actions .menu_button {
-    min-width: 0;
+#nuoji-settings .nuoji-preview-actions > .menu_button {
+    display: inline-flex !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    flex-flow: row nowrap !important;
+    align-items: center;
+    justify-content: center;
     padding: 6px 4px;
     font-size: 0.86em;
     line-height: 1.15;
+    white-space: nowrap !important;
+    word-break: keep-all !important;
+    overflow-wrap: normal !important;
+    writing-mode: horizontal-tb !important;
+}
+
+#nuoji-settings #nuoji-reset-position {
+    display: inline-flex !important;
+    width: auto !important;
+    min-width: max-content !important;
+    max-width: none !important;
+    flex-flow: row nowrap !important;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    white-space: nowrap !important;
+    word-break: keep-all !important;
+    overflow-wrap: normal !important;
+    writing-mode: horizontal-tb !important;
 }
 
 .nuoji-settings-footer {

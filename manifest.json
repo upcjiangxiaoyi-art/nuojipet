@@ -4,6 +4,9 @@
     "js": "index.js",
     "css": "style.css",
     "author": "GPT × Ripple",
-    "version": "0.3.0",
-    "auto_update": false
+    "version": "0.3.2",
+    "auto_update": false,
+    "hooks": {
+        "disable": "onDisable"
+    }
 }

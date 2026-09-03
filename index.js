@@ -4,6 +4,11 @@ const MODULE_NAME = 'nuoji_pet';
 const DEFAULT_EXTENSION_NAME = 'third-party/nuoji-pet';
 const POSITION_MARGIN = 10;
 const DRAG_THRESHOLD = 7;
+const HIT_ALPHA = 40;
+const HIT_RADIUS_TOUCH = 14;
+const HIT_RADIUS_MOUSE = 3;
+const CLICK_GUARD_DURATION = 900;
+const CLICK_GUARD_RADIUS = 36;
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
@@ -36,9 +41,33 @@ let initializePromise;
 let reactionTimer;
 let bubbleTimer;
 let positionFrame;
+let hoverFrame;
+let bootTimer;
+let settingsLayerFrame;
+let settingsLayerTimer;
 let currentPriority = 0;
 let priorityUntil = 0;
 let isGenerating = false;
+let publicApi;
+let clickGuard;
+
+const cleanups = [];
+
+function on(target, type, handler, options) {
+    target.addEventListener(type, handler, options);
+    cleanups.push(() => target.removeEventListener(type, handler, options));
+}
+
+function onEventSource(source, eventType, handler) {
+    source.on(eventType, handler);
+    cleanups.push(() => {
+        if (typeof source.off === 'function') {
+            source.off(eventType, handler);
+        } else {
+            source.removeListener?.(eventType, handler);
+        }
+    });
+}
 
 const drag = {
     active: false,
@@ -132,13 +161,102 @@ function createPetUi() {
     const bubble = root.querySelector('.nuoji-speech');
     const hint = root.querySelector('.nuoji-drag-hint');
 
-    root.addEventListener('pointerdown', handlePointerDown);
-    root.addEventListener('pointermove', handlePointerMove);
-    root.addEventListener('pointerup', handlePointerUp);
-    root.addEventListener('pointercancel', handlePointerCancel);
-    root.addEventListener('keydown', handlePetKeydown);
+    // The root itself is click-through. A document-level capture listener only
+    // claims input that lands on Nuoji's painted pixels.
+    on(document, 'pointerdown', handlePointerDown, { capture: true });
+    on(document, 'click', handleClickGuard, { capture: true });
+    on(document, 'touchstart', handleTouchStartGuard, { capture: true, passive: false });
+    on(document, 'pointermove', handlePointerMove, { capture: true, passive: false });
+    on(document, 'pointerup', handlePointerUp, { capture: true });
+    on(document, 'pointercancel', handlePointerCancel, { capture: true });
+    on(document, 'pointermove', handleHoverHint, { passive: true });
+    on(root, 'keydown', handlePetKeydown);
 
     return { root, canvas, bubble, hint };
+}
+
+function hitsNuoji(clientX, clientY, pointerType = 'mouse') {
+    if (!ui?.root || !renderer?.ctx || !settings?.enabled) {
+        return false;
+    }
+
+    const rect = ui.root.getBoundingClientRect();
+    if (
+        clientX < rect.left
+        || clientX > rect.right
+        || clientY < rect.top
+        || clientY > rect.bottom
+        || rect.width <= 0
+    ) {
+        return false;
+    }
+
+    const radius = pointerType === 'mouse' ? HIT_RADIUS_MOUSE : HIT_RADIUS_TOUCH;
+    const toCanvas = ui.canvas.width / rect.width;
+    const centerX = (clientX - rect.left) * toCanvas;
+    const centerY = (clientY - rect.top) * toCanvas;
+    const sampleRadius = Math.max(1, Math.round(radius * toCanvas));
+    const x = clamp(Math.round(centerX - sampleRadius), 0, ui.canvas.width - 1);
+    const y = clamp(Math.round(centerY - sampleRadius), 0, ui.canvas.height - 1);
+    const width = Math.min(ui.canvas.width - x, sampleRadius * 2 + 1);
+    const height = Math.min(ui.canvas.height - y, sampleRadius * 2 + 1);
+
+    try {
+        const pixels = renderer.ctx.getImageData(x, y, width, height).data;
+        for (let index = 3; index < pixels.length; index += 4) {
+            if (pixels[index] > HIT_ALPHA) {
+                return true;
+            }
+        }
+    } catch (error) {
+        console.warn('[Nuoji Pet] Pixel hit test failed; using the pet box.', error);
+        return true;
+    }
+
+    return false;
+}
+
+function handleTouchStartGuard(event) {
+    if (!drag.active) {
+        return;
+    }
+
+    event.stopImmediatePropagation();
+    event.preventDefault();
+}
+
+function handleHoverHint(event) {
+    if (event.pointerType !== 'mouse' || drag.active) {
+        return;
+    }
+
+    window.cancelAnimationFrame(hoverFrame);
+    hoverFrame = window.requestAnimationFrame(() => {
+        ui?.root.classList.toggle('is-hover', hitsNuoji(event.clientX, event.clientY, 'mouse'));
+    });
+}
+
+function armClickGuard(event) {
+    clickGuard = {
+        x: event.clientX,
+        y: event.clientY,
+        expiresAt: performance.now() + CLICK_GUARD_DURATION,
+    };
+}
+
+function handleClickGuard(event) {
+    if (!clickGuard) {
+        return;
+    }
+
+    const isFresh = performance.now() <= clickGuard.expiresAt;
+    const isNearby = Math.hypot(event.clientX - clickGuard.x, event.clientY - clickGuard.y) <= CLICK_GUARD_RADIUS;
+    clickGuard = undefined;
+
+    if (isFresh && isNearby) {
+        event.stopImmediatePropagation();
+        event.preventDefault();
+    }
 }
 
 async function createSettingsUi() {
@@ -168,6 +286,54 @@ async function createSettingsUi() {
     settingsHost.insertAdjacentHTML('beforeend', html);
     bindSettingsControls();
     syncSettingsControls();
+    bindSettingsPreviewLayer();
+}
+
+function settingsPanelIsVisible() {
+    const panel = document.getElementById('nuoji-settings');
+    const content = panel?.querySelector('.inline-drawer-content');
+    if (!content) {
+        return false;
+    }
+
+    const styles = window.getComputedStyle(content);
+    const rect = content.getBoundingClientRect();
+    const viewport = viewportBox();
+    const viewportRight = viewport.left + viewport.width;
+    const viewportBottom = viewport.top + viewport.height;
+    const intersectsViewport = (
+        rect.right > viewport.left
+        && rect.left < viewportRight
+        && rect.bottom > viewport.top
+        && rect.top < viewportBottom
+    );
+
+    return (
+        styles.display !== 'none'
+        && styles.visibility !== 'hidden'
+        && styles.opacity !== '0'
+        && rect.width > 1
+        && rect.height > 1
+        && intersectsViewport
+    );
+}
+
+function syncSettingsPreviewLayer() {
+    ui?.root?.classList.toggle('is-settings-preview', settingsPanelIsVisible());
+}
+
+function scheduleSettingsPreviewLayer() {
+    window.cancelAnimationFrame(settingsLayerFrame);
+    window.clearTimeout(settingsLayerTimer);
+    settingsLayerFrame = window.requestAnimationFrame(syncSettingsPreviewLayer);
+    settingsLayerTimer = window.setTimeout(syncSettingsPreviewLayer, 320);
+}
+
+function bindSettingsPreviewLayer() {
+    on(document, 'click', scheduleSettingsPreviewLayer, { capture: true });
+    on(document, 'keydown', scheduleSettingsPreviewLayer, { capture: true });
+    on(document, 'scroll', scheduleSettingsPreviewLayer, { capture: true, passive: true });
+    scheduleSettingsPreviewLayer();
 }
 
 function bindSettingsControls() {
@@ -178,54 +344,66 @@ function bindSettingsControls() {
     const showBubble = document.getElementById('nuoji-show-bubble');
     const resetPosition = document.getElementById('nuoji-reset-position');
 
-    enabled?.addEventListener('change', (event) => {
-        settings.enabled = event.currentTarget.checked;
-        applyVisualSettings();
-        saveSettings();
-    });
-
-    scale?.addEventListener('input', (event) => {
-        settings.scale = clamp(Number(event.currentTarget.value), 70, 150);
-        applyVisualSettings({ reposition: true });
-        syncSettingsControls();
-        saveSettings();
-    });
-
-    opacity?.addEventListener('input', (event) => {
-        settings.opacity = clamp(Number(event.currentTarget.value), 40, 100);
-        applyVisualSettings();
-        syncSettingsControls();
-        saveSettings();
-    });
-
-    reducedMotion?.addEventListener('change', (event) => {
-        settings.reducedMotion = event.currentTarget.checked;
-        renderer?.setReducedMotion(settings.reducedMotion);
-        saveSettings();
-    });
-
-    showBubble?.addEventListener('change', (event) => {
-        settings.showBubble = event.currentTarget.checked;
-        if (!settings.showBubble) {
-            hideBubble();
-        }
-        saveSettings();
-    });
-
-    resetPosition?.addEventListener('click', () => {
-        settings.position = { ...DEFAULT_SETTINGS.position };
-        applyStoredPosition();
-        transitionTo(PET_STATES.WAVE, {
-            duration: 1500,
-            bubble: '我回来啦～',
-            priority: 30,
-            force: true,
+    if (enabled) {
+        on(enabled, 'change', (event) => {
+            settings.enabled = event.currentTarget.checked;
+            applyVisualSettings();
+            saveSettings();
         });
-        saveSettings();
-    });
+    }
+
+    if (scale) {
+        on(scale, 'input', (event) => {
+            settings.scale = clamp(Number(event.currentTarget.value), 70, 150);
+            applyVisualSettings({ reposition: true });
+            syncSettingsControls();
+            saveSettings();
+        });
+    }
+
+    if (opacity) {
+        on(opacity, 'input', (event) => {
+            settings.opacity = clamp(Number(event.currentTarget.value), 40, 100);
+            applyVisualSettings();
+            syncSettingsControls();
+            saveSettings();
+        });
+    }
+
+    if (reducedMotion) {
+        on(reducedMotion, 'change', (event) => {
+            settings.reducedMotion = event.currentTarget.checked;
+            renderer?.setReducedMotion(settings.reducedMotion);
+            saveSettings();
+        });
+    }
+
+    if (showBubble) {
+        on(showBubble, 'change', (event) => {
+            settings.showBubble = event.currentTarget.checked;
+            if (!settings.showBubble) {
+                hideBubble();
+            }
+            saveSettings();
+        });
+    }
+
+    if (resetPosition) {
+        on(resetPosition, 'click', () => {
+            settings.position = { ...DEFAULT_SETTINGS.position };
+            applyStoredPosition();
+            transitionTo(PET_STATES.WAVE, {
+                duration: 1500,
+                bubble: '我回来啦～',
+                priority: 30,
+                force: true,
+            });
+            saveSettings();
+        });
+    }
 
     document.querySelectorAll('[data-nuoji-preview]').forEach((button) => {
-        button.addEventListener('click', () => {
+        on(button, 'click', () => {
             const state = button.dataset.nuojiPreview;
             if (!Object.values(PET_STATES).includes(state)) {
                 return;
@@ -279,9 +457,17 @@ function applyVisualSettings({ reposition = false } = {}) {
     }
 
     ui.root.classList.toggle('is-disabled', !settings.enabled);
+    if (settings.enabled) {
+        renderer?.start();
+    } else {
+        renderer?.stop();
+        hideBubble();
+        window.clearTimeout(reactionTimer);
+    }
     ui.root.style.setProperty('--nuoji-scale', String(settings.scale / 100));
     ui.root.style.setProperty('--nuoji-opacity', String(settings.opacity / 100));
     renderer?.setReducedMotion(settings.reducedMotion);
+    scheduleSettingsPreviewLayer();
 
     if (reposition) {
         window.cancelAnimationFrame(positionFrame);
@@ -368,10 +554,20 @@ function rememberCurrentPosition() {
 }
 
 function handlePointerDown(event) {
+    // A deliberate new pointer action must never inherit an old synthetic-click guard.
+    clickGuard = undefined;
     if (event.button !== undefined && event.button !== 0) {
         return;
     }
+    if (
+        drag.active
+        || !event.isPrimary
+        || !hitsNuoji(event.clientX, event.clientY, event.pointerType || 'mouse')
+    ) {
+        return;
+    }
 
+    event.stopImmediatePropagation();
     const rect = ui.root.getBoundingClientRect();
     drag.active = true;
     drag.moved = false;
@@ -380,8 +576,8 @@ function handlePointerDown(event) {
     drag.startY = event.clientY;
     drag.startLeft = rect.left;
     drag.startTop = rect.top;
-    ui.root.setPointerCapture?.(event.pointerId);
     ui.root.classList.add('is-pressed');
+    armClickGuard(event);
     event.preventDefault();
 }
 
@@ -406,6 +602,7 @@ function handlePointerMove(event) {
         setPixelPosition(drag.startLeft + deltaX, drag.startTop + deltaY);
     }
 
+    event.stopImmediatePropagation();
     event.preventDefault();
 }
 
@@ -414,8 +611,11 @@ function handlePointerUp(event) {
         return;
     }
 
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    armClickGuard(event);
     const wasDragged = drag.moved;
-    finishPointerInteraction(event);
+    finishPointerInteraction();
 
     if (wasDragged) {
         rememberCurrentPosition();
@@ -435,18 +635,18 @@ function handlePointerCancel(event) {
         return;
     }
 
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    armClickGuard(event);
     const wasDragged = drag.moved;
-    finishPointerInteraction(event);
+    finishPointerInteraction();
     if (wasDragged) {
         rememberCurrentPosition();
     }
     returnToAmbient();
 }
 
-function finishPointerInteraction(event) {
-    if (ui.root.hasPointerCapture?.(event.pointerId)) {
-        ui.root.releasePointerCapture(event.pointerId);
-    }
+function finishPointerInteraction() {
     ui.root.classList.remove('is-pressed', 'is-dragging');
     drag.active = false;
     drag.moved = false;
@@ -537,7 +737,7 @@ function listen(eventName, handler) {
         return;
     }
 
-    context.eventSource.on(eventType, handler);
+    onEventSource(context.eventSource, eventType, handler);
 }
 
 function bindSillyTavernEvents() {
@@ -622,15 +822,18 @@ function bindViewportEvents() {
     const scheduleReposition = () => {
         window.cancelAnimationFrame(positionFrame);
         positionFrame = window.requestAnimationFrame(applyStoredPosition);
+        scheduleSettingsPreviewLayer();
     };
 
-    window.addEventListener('resize', scheduleReposition, { passive: true });
-    window.visualViewport?.addEventListener('resize', scheduleReposition, { passive: true });
-    window.visualViewport?.addEventListener('scroll', scheduleReposition, { passive: true });
+    on(window, 'resize', scheduleReposition, { passive: true });
+    if (window.visualViewport) {
+        on(window.visualViewport, 'resize', scheduleReposition, { passive: true });
+        on(window.visualViewport, 'scroll', scheduleReposition, { passive: true });
+    }
 }
 
 function bindCustomReactionEvent() {
-    window.addEventListener('nuoji:react', (event) => {
+    on(window, 'nuoji:react', (event) => {
         const state = event.detail?.state;
         if (!Object.values(PET_STATES).includes(state)) {
             return;
@@ -645,12 +848,70 @@ function bindCustomReactionEvent() {
     });
 }
 
+export function destroy() {
+    while (cleanups.length) {
+        try {
+            cleanups.pop()();
+        } catch (error) {
+            console.warn('[Nuoji Pet] Cleanup failed.', error);
+        }
+    }
+
+    window.clearTimeout(bootTimer);
+    window.clearTimeout(reactionTimer);
+    window.clearTimeout(bubbleTimer);
+    window.cancelAnimationFrame(positionFrame);
+    window.cancelAnimationFrame(hoverFrame);
+    window.cancelAnimationFrame(settingsLayerFrame);
+    window.clearTimeout(settingsLayerTimer);
+    renderer?.destroy();
+    ui?.root?.remove();
+    document.getElementById('nuoji-settings')?.remove();
+
+    if (window.NuojiPet === publicApi) {
+        delete window.NuojiPet;
+    }
+
+    context = undefined;
+    settings = undefined;
+    renderer = undefined;
+    ui = undefined;
+    initializePromise = undefined;
+    reactionTimer = undefined;
+    bubbleTimer = undefined;
+    positionFrame = undefined;
+    hoverFrame = undefined;
+    bootTimer = undefined;
+    settingsLayerFrame = undefined;
+    settingsLayerTimer = undefined;
+    currentPriority = 0;
+    priorityUntil = 0;
+    isGenerating = false;
+    publicApi = undefined;
+    clickGuard = undefined;
+    drag.active = false;
+    drag.moved = false;
+    drag.pointerId = null;
+}
+
+export function onDisable() {
+    destroy();
+}
+
 async function initialize() {
     if (initializePromise) {
         return initializePromise;
     }
 
     initializePromise = (async () => {
+        const previousApi = window.NuojiPet;
+        if (typeof previousApi?.destroy === 'function' && previousApi.destroy !== destroy) {
+            previousApi.destroy();
+        }
+        if (ui || renderer) {
+            destroy();
+        }
+
         context = SillyTavern.getContext();
         settings = getSettings();
         ui = createPetUi();
@@ -673,23 +934,33 @@ async function initialize() {
         });
 
         // A tiny debug/integration surface for future affection and feeding modules.
-        window.NuojiPet = Object.freeze({
+        publicApi = Object.freeze({
             states: PET_STATES,
+            destroy,
             react(state, message = '', duration = 1800) {
                 window.dispatchEvent(new CustomEvent('nuoji:react', {
                     detail: { state, message, duration },
                 }));
             },
         });
+        window.NuojiPet = publicApi;
 
         console.info('[Nuoji Pet] 糯叽已就位。');
     })().catch((error) => {
-        initializePromise = undefined;
+        destroy();
         console.error('[Nuoji Pet] Initialization failed.', error);
         throw error;
     });
 
     return initializePromise;
+}
+
+function scheduleInitialize() {
+    window.clearTimeout(bootTimer);
+    bootTimer = window.setTimeout(() => {
+        bootTimer = undefined;
+        void initialize();
+    }, 0);
 }
 
 function boot() {
@@ -699,11 +970,9 @@ function boot() {
 
         if (appReady) {
             // APP_READY auto-fires for late subscribers. Defer so we do not hold up ST's loader.
-            initialContext.eventSource.on(appReady, () => {
-                window.setTimeout(() => void initialize(), 0);
-            });
+            onEventSource(initialContext.eventSource, appReady, scheduleInitialize);
         } else {
-            window.setTimeout(() => void initialize(), 0);
+            scheduleInitialize();
         }
     } catch (error) {
         console.error('[Nuoji Pet] Could not attach to SillyTavern.', error);
@@ -711,7 +980,7 @@ function boot() {
 }
 
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once: true });
+    on(document, 'DOMContentLoaded', boot, { once: true });
 } else {
     boot();
 }
