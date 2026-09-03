@@ -1039,43 +1039,52 @@ function bindDirectInputSignals() {
     setSignalStatus(lastSignalStatus);
 }
 
-function bindSillyTavernEvents() {
-    // MESSAGE_SENT is the earliest normal send signal. USER_MESSAGE_RENDERED
-    // covers input helpers that insert a message through the UI, while
-    // GENERATION_AFTER_COMMANDS catches generation immediately after commands.
-    listen('MESSAGE_SENT', () => beginThinking('MESSAGE_SENT'));
-    listen('USER_MESSAGE_RENDERED', () => beginThinking('USER_MESSAGE_RENDERED'));
-    listen('GENERATION_AFTER_COMMANDS', () => beginThinking('GENERATION_AFTER_COMMANDS'));
+let replyArrived = false;
+let generationEndTimer;
 
-    listen('GENERATION_STARTED', () => beginThinking('GENERATION_STARTED'));
+/**
+ * Canonical SillyTavern generation lifecycle (verified against release script.js):
+ *   GENERATION_STARTED(type, args, dryRun)  -- also fires for dryRun and type==='quiet' (background
+ *                                              generations from other extensions). Those NEVER emit
+ *                                              MESSAGE_RECEIVED, so they must be ignored here.
+ *   streaming:     hideStopButton() -> GENERATION_ENDED, then MESSAGE_RECEIVED, CHARACTER_MESSAGE_RENDERED
+ *   non-streaming: MESSAGE_RECEIVED, CHARACTER_MESSAGE_RENDERED, ... then GENERATION_ENDED
+ *   GENERATION_STOPPED on manual abort (GENERATION_ENDED follows).
+ * So: GENERATION_ENDED is always the end. Whether it is "happy" or "confused" is decided
+ * by whether a reply arrives within a short settle window around it.
+ */
+function bindSillyTavernEvents() {
+    listen('MESSAGE_SENT', () => {
+        transitionTo(PET_STATES.LISTENING, { duration: 1200, bubble: '嗯嗯，我在听', priority: 25, force: true });
+    });
+
+    listen('GENERATION_STARTED', (type, _args, dryRun) => {
+        if (dryRun || type === 'quiet') {
+            return; // token counting / background prompts from other extensions
+        }
+        replyArrived = false;
+        window.clearTimeout(generationEndTimer);
+        beginThinking(`GENERATION_STARTED:${type}`);
+    });
 
     listen('STREAM_TOKEN_RECEIVED', () => {
         renderer?.pulse();
     });
 
-    listen('MESSAGE_RECEIVED', () => {
-        if (!isGenerating) {
+    listen('MESSAGE_RECEIVED', (_messageId, type) => {
+        if (type === 'quiet' || !isGenerating && !generationEndTimer) {
             return;
         }
-
-        // In streaming mode this can fire when the assistant message shell is
-        // created, before the response is actually complete.
-        if (streamingModeIsEnabled() || stopControlIsActive()) {
-            setSignalStatus('已收到流式开头，继续等完整回信', 'MESSAGE_RECEIVED');
-            renderer?.pulse();
-            return;
-        }
-
-        scheduleGenerationFinish('MESSAGE_RECEIVED');
-    });
-
-    listen('CHARACTER_MESSAGE_RENDERED', () => {
-        if (isGenerating || renderer?.state === PET_STATES.THINKING) {
-            finishThinking('好耶！');
-        }
+        replyArrived = true;
+        window.clearTimeout(generationEndTimer);
+        generationEndTimer = undefined;
+        finishThinking();
     });
 
     listen('GENERATION_STOPPED', () => {
+        replyArrived = true; // suppress the "结束啦?" follow-up from GENERATION_ENDED
+        window.clearTimeout(generationEndTimer);
+        generationEndTimer = undefined;
         stopThinkingManually();
     });
 
@@ -1083,29 +1092,30 @@ function bindSillyTavernEvents() {
         if (!isGenerating) {
             return;
         }
-
-        // The reference typing indicator deliberately does not close on this
-        // event during streaming. The Stop control and final render are the
-        // authoritative completion signals.
-        setSignalStatus('生成正在收尾，继续等完整回信', 'GENERATION_ENDED');
-        if (streamingModeIsEnabled()) {
-            return;
+        clearGenerationWatchdog();
+        isGenerating = false;
+        if (replyArrived) {
+            return; // non-streaming: HAPPY already played
         }
-        scheduleGenerationFinish('GENERATION_ENDED');
+        // streaming: MESSAGE_RECEIVED lands a few ms after this. Give it a beat.
+        window.clearTimeout(generationEndTimer);
+        generationEndTimer = window.setTimeout(() => {
+            generationEndTimer = undefined;
+            if (replyArrived) {
+                return;
+            }
+            setSignalStatus('生成结束但没有回信（报错？）', 'GENERATION_ENDED');
+            transitionTo(PET_STATES.CONFUSED, { duration: 1700, bubble: '欸，结束啦？', priority: 30, force: true });
+        }, 400);
     });
 
     listen('CHAT_CHANGED', () => {
-        clearGenerationFinishTimer();
         clearGenerationWatchdog();
+        window.clearTimeout(generationEndTimer);
+        generationEndTimer = undefined;
         isGenerating = false;
         setSignalStatus('已切换聊天，等待发送');
-        resetObservedChatLength();
-        transitionTo(PET_STATES.WAVE, {
-            duration: 1700,
-            bubble: '我也跟过来啦！',
-            priority: 30,
-            force: true,
-        });
+        transitionTo(PET_STATES.WAVE, { duration: 1700, bubble: '我也跟过来啦！', priority: 30, force: true });
     });
 }
 
@@ -1229,9 +1239,10 @@ async function initialize() {
         applyVisualSettings();
         applyStoredPosition();
         await createSettingsUi();
-        bindDirectInputSignals();
+        // v0.3.6: the DOM/button/chat-observer fallbacks were the cause of the
+        // stuck "让我想想…" (they re-entered thinking on quiet/dryRun generations
+        // and ignored GENERATION_ENDED). Events alone are sufficient and exact.
         bindSillyTavernEvents();
-        bindChatActivityFallback();
         bindViewportEvents();
         bindCustomReactionEvent();
 
