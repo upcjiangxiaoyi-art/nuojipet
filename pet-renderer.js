@@ -25,21 +25,105 @@ const BALL_GREEN_URL = new URL('./assets/nuoji-ball-green-v1.png', import.meta.u
 const WALK_GREEN_URL = new URL('./assets/nuoji-walk-green-v1.png', import.meta.url).href;
 const WALK_LAYER_URLS = Object.freeze({
     body: new URL('./assets/nuoji-walk-body-v1.png', import.meta.url).href,
+    underpaint: new URL('./assets/nuoji-walk-underpaint-v1.png', import.meta.url).href,
     frontNear: new URL('./assets/nuoji-walk-leg-front-near-v1.png', import.meta.url).href,
     frontFar: new URL('./assets/nuoji-walk-leg-front-far-v1.png', import.meta.url).href,
     hindNear: new URL('./assets/nuoji-walk-leg-hind-near-v1.png', import.meta.url).href,
     hindFar: new URL('./assets/nuoji-walk-leg-hind-far-v1.png', import.meta.url).href,
 });
+const TAU = Math.PI * 2;
+// A relaxed feline walk is a four-beat lateral-sequence gait. Each paw spends
+// most of its cycle supporting the body; the short return stroke is the only
+// part that lifts. The slightly uneven 0.27 / 0.23 spacing keeps the diagonal
+// couplets soft instead of snapping two legs together like a trot.
+const WALK_STANCE_PORTION = 0.72;
 const WALK_LEGS = Object.freeze([
-    { name: 'frontFar', pivot: { x: 450, y: 720 }, offset: Math.PI, amplitude: 0.17 },
-    { name: 'hindFar', pivot: { x: 850, y: 710 }, offset: 0, amplitude: 0.15 },
-    { name: 'frontNear', pivot: { x: 370, y: 700 }, offset: 0, amplitude: 0.19 },
-    { name: 'hindNear', pivot: { x: 700, y: 710 }, offset: Math.PI, amplitude: 0.16 },
+    {
+        name: 'frontFar', pivot: { x: 450, y: 720 }, touchdown: 0.77,
+        forwardAngle: 0.20, backwardAngle: 0.17, lift: 10.5, tuck: 0.038,
+    },
+    {
+        name: 'hindFar', pivot: { x: 850, y: 710 }, touchdown: 0.50,
+        forwardAngle: 0.19, backwardAngle: 0.21, lift: 10, tuck: 0.034,
+    },
+    {
+        name: 'frontNear', pivot: { x: 370, y: 700 }, touchdown: 0.27,
+        forwardAngle: 0.24, backwardAngle: 0.19, lift: 13, tuck: 0.048,
+    },
+    {
+        name: 'hindNear', pivot: { x: 700, y: 710 }, touchdown: 0,
+        forwardAngle: 0.23, backwardAngle: 0.24, lift: 12, tuck: 0.042,
+    },
 ]);
+const WALK_FAR_LEGS = Object.freeze(WALK_LEGS.slice(0, 2));
+const WALK_NEAR_LEGS = Object.freeze(WALK_LEGS.slice(2));
 const CLOSED_EYES_SOURCE = Object.freeze({ x: 305, y: 290, width: 305, height: 190 });
 const TAIL_PIVOT = Object.freeze({ x: 690, y: 760 });
 const LEFT_EAR_PIVOT = Object.freeze({ x: 270, y: 360 });
 const RIGHT_EAR_PIVOT = Object.freeze({ x: 530, y: 335 });
+
+function wrapUnit(value) {
+    return ((value % 1) + 1) % 1;
+}
+
+function smootherStep(value) {
+    const clamped = Math.min(1, Math.max(0, value));
+    return clamped ** 3 * (clamped * (clamped * 6 - 15) + 10);
+}
+
+/**
+ * Return one leg's pose for a distance-driven four-beat walking cycle.
+ * Exported so the gait can be regression-tested without depending on timing.
+ */
+export function getWalkLegPose(phaseRadians, legName) {
+    const leg = WALK_LEGS.find((candidate) => candidate.name === legName);
+    if (!leg) {
+        throw new RangeError(`Unknown walking leg: ${legName}`);
+    }
+
+    // `touchdown` is the point in the global stride at which this paw lands.
+    // The order is hind-near -> front-near -> hind-far -> front-far.
+    const cycle = wrapUnit((Number(phaseRadians) || 0) / TAU - leg.touchdown);
+    if (cycle < WALK_STANCE_PORTION) {
+        const progress = smootherStep(cycle / WALK_STANCE_PORTION);
+        return {
+            angle: leg.forwardAngle + (-leg.backwardAngle - leg.forwardAngle) * progress,
+            lift: 0,
+            tuck: 0,
+            cycle,
+            swinging: false,
+        };
+    }
+
+    const swingProgress = (cycle - WALK_STANCE_PORTION) / (1 - WALK_STANCE_PORTION);
+    const travel = smootherStep(swingProgress);
+    const arc = Math.sin(swingProgress * Math.PI) ** 1.35;
+    return {
+        angle: -leg.backwardAngle + (leg.forwardAngle + leg.backwardAngle) * travel,
+        lift: arc * leg.lift,
+        tuck: arc * leg.tuck,
+        cycle,
+        swinging: true,
+    };
+}
+
+function drawWalkingLeg(ctx, image, leg, phase, still, walkWidth, walkHeight, walkFitScale) {
+    const pose = still
+        ? { angle: 0, lift: 0, tuck: 0 }
+        : getWalkLegPose(phase, leg.name);
+    const pivotX = -walkWidth / 2 + leg.pivot.x * walkFitScale;
+    const pivotY = -walkHeight + leg.pivot.y * walkFitScale;
+    ctx.save();
+    ctx.translate(0, -pose.lift);
+    ctx.translate(pivotX, pivotY);
+    ctx.rotate(pose.angle);
+    // A tiny shortening at mid-swing suggests elbow/hock flex without adding
+    // extra images or exposing the hidden shoulder/hip seam.
+    ctx.scale(1, 1 - pose.tuck);
+    ctx.translate(-pivotX, -pivotY);
+    ctx.drawImage(image, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
+    ctx.restore();
+}
 
 function ellipse(ctx, x, y, radiusX, radiusY, fillStyle) {
     ctx.beginPath();
@@ -115,7 +199,10 @@ export class NuojiRenderer {
         this.ballReady = false;
         this.ballLoading = false;
         this.walkImage = null;
-        this.walkLayers = { body: null, frontNear: null, frontFar: null, hindNear: null, hindFar: null };
+        this.walkLayers = {
+            body: null, underpaint: null,
+            frontNear: null, frontFar: null, hindNear: null, hindFar: null,
+        };
         this.walkLayersReady = false;
         this.walkReady = false;
         this.walkLoading = false;
@@ -500,7 +587,10 @@ export class NuojiRenderer {
         this.lyingImage = null;
         this.ballImage = null;
         this.walkImage = null;
-        this.walkLayers = { body: null, frontNear: null, frontFar: null, hindNear: null, hindFar: null };
+        this.walkLayers = {
+            body: null, underpaint: null,
+            frontNear: null, frontFar: null, hindNear: null, hindFar: null,
+        };
         this.walkLayersReady = false;
     }
 
@@ -743,10 +833,13 @@ export class NuojiRenderer {
             const walkWidth = walkNaturalWidth * walkFitScale;
             const walkHeight = walkNaturalHeight * walkFitScale;
             const phase = still ? 0 : this.walkPhase;
-            const step = Math.abs(Math.sin(phase));
-            const bob = step * 2;
-            const lean = still ? 0 : Math.sin(phase) * 0.004 * this.walkDirection;
-            const squash = still ? 0 : step * 0.003;
+            // Four tiny weight transfers per stride, with a slower two-beat
+            // shoulder/hip counter-shift underneath. Keep both subtle: the
+            // paws should sell the walk, not a bouncing body plate.
+            const transfer = still ? 0 : (1 - Math.cos(phase * 4)) * 0.5;
+            const bob = transfer * 1.35;
+            const lean = still ? 0 : Math.sin(phase * 2) * 0.0035 * this.walkDirection;
+            const squash = still ? 0 : transfer * 0.0016;
             ctx.save();
             ctx.globalAlpha = alpha * walkingBlend;
             // The production plate has generous green-key margin below the paws.
@@ -757,19 +850,21 @@ export class NuojiRenderer {
             ctx.scale(-this.walkDirection, 1);
             ctx.scale(1 + squash, 1 - squash * 0.7);
             if (this.walkLayersReady) {
-                for (const leg of WALK_LEGS) {
-                    const legPhase = phase + leg.offset;
-                    const swing = Math.sin(legPhase);
-                    const lift = still ? 0 : Math.max(0, swing) * 6;
-                    const pivotX = -walkWidth / 2 + leg.pivot.x * walkFitScale;
-                    const pivotY = -walkHeight + leg.pivot.y * walkFitScale;
-                    ctx.save();
-                    ctx.translate(0, -lift);
-                    ctx.translate(pivotX, pivotY);
-                    ctx.rotate(swing * leg.amplitude);
-                    ctx.translate(-pivotX, -pivotY);
-                    ctx.drawImage(this.walkLayers[leg.name], -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
-                    ctx.restore();
+                // Far legs disappear beneath the belly; the small original-fur
+                // underpaint closes their moving sockets. Near legs sit above
+                // it, then the immutable body hides every upper-leg seam.
+                for (const leg of WALK_FAR_LEGS) {
+                    drawWalkingLeg(
+                        ctx, this.walkLayers[leg.name], leg, phase, still,
+                        walkWidth, walkHeight, walkFitScale,
+                    );
+                }
+                ctx.drawImage(this.walkLayers.underpaint, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
+                for (const leg of WALK_NEAR_LEGS) {
+                    drawWalkingLeg(
+                        ctx, this.walkLayers[leg.name], leg, phase, still,
+                        walkWidth, walkHeight, walkFitScale,
+                    );
                 }
                 // One immutable head/body/tail plate sits above all four leg
                 // roots, so the face and silhouette never jump between frames.

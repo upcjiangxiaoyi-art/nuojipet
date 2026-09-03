@@ -19,7 +19,7 @@ const AUTO_WALK_MIN_DELAY = 42000;
 const AUTO_WALK_JITTER = 36000;
 const WALK_MIN_DISTANCE = 52;
 const WALK_MAX_DISTANCE = 92;
-const WALK_DURATION = 2300;
+const WALK_DURATION = 3200;
 const GENERATION_SETTLE_DELAY = 520;
 const SEND_BUTTON_SELECTOR = '#send_but';
 const STOP_BUTTON_SELECTOR = '#mes_stop';
@@ -449,7 +449,7 @@ function bindSettingsControls() {
 
     if (previewWalk) {
         on(previewWalk, 'click', () => {
-            startAutoWalk(0, 1900, { announce: true });
+            startAutoWalk(0, 2700, { announce: true });
         });
     }
 
@@ -996,7 +996,9 @@ function startAutoWalk(preferredDirection = 0, duration = WALK_DURATION, { annou
     }
 
     const safeDuration = clamp(finiteNumber(duration, WALK_DURATION), 600, 6000);
-    const strideLength = Math.max(48, ui.root.getBoundingClientRect().width * 0.52);
+    // Match the page translation to the paw sweep. The old 0.52-body stride
+    // outran a rigid one-piece leg and made every planted paw skid backward.
+    const strideLength = Math.max(24, ui.root.getBoundingClientRect().width * 0.24);
     roamRun = { ...path, duration: safeDuration, strideLength, startedAt: undefined };
     renderer.setWalkDirection(path.direction);
     renderer.setWalkProgress(0, strideLength);
