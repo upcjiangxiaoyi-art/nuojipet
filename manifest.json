@@ -1,0 +1,9 @@
+{
+    "display_name": "糯叽桌宠 Nuoji Pet",
+    "loading_order": 20,
+    "js": "index.js",
+    "css": "style.css",
+    "author": "GPT × Ripple",
+    "version": "0.1.0",
+    "auto_update": false
+}

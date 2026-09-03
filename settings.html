@@ -1,0 +1,57 @@
+<div id="nuoji-settings" class="nuoji-settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>糯叽桌宠</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div class="nuoji-checkboxes">
+                <label class="checkbox_label" for="nuoji-enabled">
+                    <input id="nuoji-enabled" type="checkbox" />
+                    <span>让糯叽陪着我</span>
+                </label>
+                <label class="checkbox_label" for="nuoji-show-bubble">
+                    <input id="nuoji-show-bubble" type="checkbox" />
+                    <span>显示小气泡</span>
+                </label>
+                <label class="checkbox_label" for="nuoji-reduced-motion">
+                    <input id="nuoji-reduced-motion" type="checkbox" />
+                    <span>减少动态效果</span>
+                </label>
+            </div>
+
+            <div class="nuoji-settings-grid">
+                <div class="nuoji-setting-row">
+                    <label for="nuoji-scale">糯叽大小</label>
+                    <input id="nuoji-scale" type="range" min="70" max="150" step="5" />
+                    <output id="nuoji-scale-value" for="nuoji-scale">100%</output>
+                </div>
+                <div class="nuoji-setting-row">
+                    <label for="nuoji-opacity">透明程度</label>
+                    <input id="nuoji-opacity" type="range" min="40" max="100" step="5" />
+                    <output id="nuoji-opacity-value" for="nuoji-opacity">100%</output>
+                </div>
+            </div>
+
+            <button id="nuoji-reset-position" class="menu_button" type="button">
+                <i class="fa-solid fa-location-crosshairs"></i>
+                糯叽回到右下角
+            </button>
+
+            <div class="nuoji-preview-title">戳戳看糯叽的动作</div>
+            <div class="nuoji-preview-actions">
+                <button class="menu_button" type="button" data-nuoji-preview="idle">陪伴</button>
+                <button class="menu_button" type="button" data-nuoji-preview="listening">听你说</button>
+                <button class="menu_button" type="button" data-nuoji-preview="thinking">想一想</button>
+                <button class="menu_button" type="button" data-nuoji-preview="happy">开心</button>
+                <button class="menu_button" type="button" data-nuoji-preview="confused">迷糊</button>
+                <button class="menu_button" type="button" data-nuoji-preview="petting">摸摸</button>
+                <button class="menu_button" type="button" data-nuoji-preview="sleeping">困嘟嘟</button>
+                <button class="menu_button" type="button" data-nuoji-preview="wave">挥爪</button>
+            </div>
+
+            <p class="nuoji-settings-footer">GPT × Ripple 一起搓的，不许喂成可露丽那么胖。</p>
+        </div>
+    </div>
+</div>
+
