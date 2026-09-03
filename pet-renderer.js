@@ -465,40 +465,64 @@ export class NuojiRenderer {
     earAngles(seconds, still) {
         switch (this.state) {
             case PET_STATES.LISTENING: {
-                const twitch = still ? 0 : Math.sin(seconds * 3.2) * 0.006;
-                return { left: 0.035 + twitch, right: -0.035 - twitch };
+                // Perk quickly with one soft overshoot, then stay visibly alert.
+                const overshoot = !still && seconds < 0.38
+                    ? Math.sin((seconds / 0.38) * Math.PI) * 0.055
+                    : 0;
+                const perk = 0.065 + overshoot;
+                return { left: perk, right: -perk };
             }
             case PET_STATES.THINKING: {
-                const twitch = still ? 0 : Math.sin(seconds * 3) * 0.009;
-                return { left: twitch, right: -twitch };
+                // One ear pops, then the other on the next cycle.
+                const cycle = Math.floor(seconds / 2.4);
+                const phase = seconds % 2.4;
+                const pop = !still && phase < 0.42
+                    ? Math.sin((phase / 0.42) * Math.PI) * 0.065
+                    : 0;
+                return cycle % 2 === 0
+                    ? { left: 0.018 + pop, right: -0.018 }
+                    : { left: 0.018, right: -0.018 - pop };
             }
             case PET_STATES.HAPPY: {
-                const twitch = still ? 0 : Math.sin(seconds * 6.4) * 0.022;
-                return { left: twitch, right: -twitch };
+                // Two unmistakable little ear flicks, followed by a pause.
+                const phase = seconds % 1.45;
+                let flick = 0;
+                if (!still && phase < 0.22) {
+                    flick = Math.sin((phase / 0.22) * Math.PI) * 0.072;
+                } else if (!still && phase >= 0.32 && phase < 0.54) {
+                    flick = Math.sin(((phase - 0.32) / 0.22) * Math.PI) * 0.072;
+                }
+                return { left: flick, right: -flick };
             }
             case PET_STATES.CONFUSED:
                 return {
-                    left: -0.06 + (still ? 0 : Math.sin(seconds * 1.5) * 0.006),
-                    right: 0.008,
+                    left: -0.125 + (still ? 0 : Math.sin(seconds * 1.5) * 0.008),
+                    right: 0.014,
                 };
             case PET_STATES.PETTING: {
-                const relax = still ? 0 : Math.sin(seconds * 2) * 0.005;
-                return { left: -0.018 + relax, right: 0.018 - relax };
+                const relax = still ? 0 : Math.sin(seconds * 2) * 0.01;
+                return { left: -0.065 + relax, right: 0.065 - relax };
             }
             case PET_STATES.SLEEPING:
-                return { left: -0.028, right: 0.028 };
+                return { left: -0.045, right: 0.045 };
             case PET_STATES.WAVE: {
-                const twitch = still ? 0 : Math.sin(seconds * 5.2) * 0.018;
+                const twitch = still ? 0 : Math.sin(seconds * 5.2) * 0.058;
                 return { left: twitch, right: -twitch };
             }
             case PET_STATES.IDLE:
-            default:
-                return still
-                    ? { left: 0, right: 0 }
-                    : {
-                        left: Math.sin(seconds * 1.15) * 0.004,
-                        right: Math.sin(seconds * 1.3 + 1.1) * 0.004,
-                    };
+            default: {
+                if (still) {
+                    return { left: 0, right: 0 };
+                }
+                const cycle = Math.floor(seconds / 5.2);
+                const phase = seconds % 5.2;
+                const flick = phase < 0.34
+                    ? Math.sin((phase / 0.34) * Math.PI) * 0.045
+                    : 0;
+                return cycle % 2 === 0
+                    ? { left: flick, right: 0 }
+                    : { left: 0, right: -flick };
+            }
         }
     }
 
