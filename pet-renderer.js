@@ -321,9 +321,73 @@ export class NuojiRenderer {
         ctx.rotate(rotation);
         ctx.scale(scaleX, scaleY);
         ctx.drawImage(this.skinImage, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+        this.drawBlinkOverlay(ctx, now, naturalWidth, drawWidth, drawHeight);
         ctx.restore();
 
         this.drawPaintedAccents(ctx, seconds, still);
+    }
+
+    blinkAmount(now) {
+        if ([PET_STATES.HAPPY, PET_STATES.PETTING, PET_STATES.SLEEPING].includes(this.state)) {
+            return 1;
+        }
+
+        if (this.reducedMotion) {
+            return 0;
+        }
+
+        // A quick natural blink roughly every 4.7 seconds. Using absolute time
+        // prevents state changes from restarting the blink rhythm.
+        const phase = (now % 4700) / 1000;
+        if (phase >= 0.16) {
+            return 0;
+        }
+
+        return Math.sin((phase / 0.16) * Math.PI);
+    }
+
+    drawBlinkOverlay(ctx, now, naturalWidth, drawWidth, drawHeight) {
+        const amount = this.blinkAmount(now);
+        if (amount <= 0.01) {
+            return;
+        }
+
+        const sourceScale = drawWidth / naturalWidth;
+        const sourceLeft = -drawWidth / 2;
+        const sourceTop = -drawHeight;
+        const eyes = [
+            { x: 395, y: 411, radiusX: 52, radiusY: 36, rotation: 0.06, tone: '#e5dcde' },
+            { x: 533, y: 376, radiusX: 46, radiusY: 36, rotation: -0.09, tone: '#d7cfd4' },
+        ];
+
+        ctx.save();
+        ctx.globalAlpha = amount;
+        for (const eye of eyes) {
+            const x = sourceLeft + eye.x * sourceScale;
+            const y = sourceTop + eye.y * sourceScale;
+            const radiusX = eye.radiusX * sourceScale;
+            const radiusY = eye.radiusY * sourceScale;
+
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(eye.rotation);
+
+            const furBlend = ctx.createRadialGradient(0, 0, radiusX * 0.22, 0, 0, radiusX * 1.16);
+            furBlend.addColorStop(0, eye.tone);
+            furBlend.addColorStop(0.64, eye.tone);
+            furBlend.addColorStop(1, 'rgba(244, 246, 246, 0)');
+            ellipse(ctx, 0, 0, radiusX * 1.16, radiusY * 1.16, furBlend);
+
+            ctx.beginPath();
+            ctx.moveTo(-radiusX * 0.72, 0);
+            ctx.quadraticCurveTo(0, radiusY * 0.25, radiusX * 0.72, 0);
+            ctx.strokeStyle = 'rgba(91, 88, 96, 0.78)';
+            ctx.lineWidth = Math.max(1.5, 3.2 * sourceScale);
+            ctx.lineCap = 'round';
+            ctx.stroke();
+            ctx.restore();
+        }
+        ctx.restore();
     }
 
     drawPaintedAccents(ctx, seconds, still) {
