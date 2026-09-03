@@ -23,6 +23,7 @@ const CLOSED_EYES_URL = new URL('./assets/nuoji-closed-eyes-v2.png', import.meta
 const LYING_GREEN_URL = new URL('./assets/nuoji-lying-green-v1.png', import.meta.url).href;
 const BALL_GREEN_URL = new URL('./assets/nuoji-ball-green-v1.png', import.meta.url).href;
 const WALK_GREEN_URL = new URL('./assets/nuoji-walk-green-v1.png', import.meta.url).href;
+const WALK_GREEN_ALT_URL = new URL('./assets/nuoji-walk-green-v2.png', import.meta.url).href;
 const CLOSED_EYES_SOURCE = Object.freeze({ x: 305, y: 290, width: 305, height: 190 });
 const TAIL_PIVOT = Object.freeze({ x: 690, y: 760 });
 const LEFT_EAR_PIVOT = Object.freeze({ x: 270, y: 360 });
@@ -102,6 +103,7 @@ export class NuojiRenderer {
         this.ballReady = false;
         this.ballLoading = false;
         this.walkImage = null;
+        this.walkImageAlt = null;
         this.walkReady = false;
         this.walkLoading = false;
         this.walkDirection = -1;
@@ -251,24 +253,43 @@ export class NuojiRenderer {
             return;
         }
         this.walkLoading = true;
-        const image = new Image();
-        image.decoding = 'async';
-        image.addEventListener('load', () => {
-            this.walkImage = this.removeGreenScreen(image);
+        let remaining = 2;
+        const finish = () => {
+            remaining -= 1;
+            if (remaining > 0) {
+                return;
+            }
+            // One surviving plate is still a safe fallback; two plates make
+            // the paws visibly alternate instead of sliding over the page.
+            this.walkImage ??= this.walkImageAlt;
+            this.walkImageAlt ??= this.walkImage;
             this.walkReady = Boolean(this.walkImage);
             this.walkLoading = false;
-            if (this.requestedForm === 'walking') {
+            if (this.requestedForm === 'walking' && this.walkReady) {
                 this.setForm('walking');
             }
+            if (!this.walkReady) {
+                console.warn('[Nuoji Pet] Walking poses failed to load; keeping the sitting pose.');
+            }
             this.draw(performance.now());
-        }, { once: true });
-        image.addEventListener('error', () => {
-            this.walkImage = null;
-            this.walkReady = false;
-            this.walkLoading = false;
-            console.warn('[Nuoji Pet] Walking pose failed to load; keeping the sitting pose.');
-        }, { once: true });
-        image.src = WALK_GREEN_URL;
+        };
+
+        for (const [property, url] of [
+            ['walkImage', WALK_GREEN_URL],
+            ['walkImageAlt', WALK_GREEN_ALT_URL],
+        ]) {
+            const image = new Image();
+            image.decoding = 'async';
+            image.addEventListener('load', () => {
+                this[property] = this.removeGreenScreen(image);
+                finish();
+            }, { once: true });
+            image.addEventListener('error', () => {
+                this[property] = null;
+                finish();
+            }, { once: true });
+            image.src = url;
+        }
     }
 
     removeGreenScreen(image) {
@@ -441,6 +462,7 @@ export class NuojiRenderer {
         this.lyingImage = null;
         this.ballImage = null;
         this.walkImage = null;
+        this.walkImageAlt = null;
     }
 
     handleVisibilityChange() {
@@ -675,16 +697,21 @@ export class NuojiRenderer {
         }
 
         if (walkingBlend > 0.001 && this.walkImage) {
-            const walkNaturalWidth = this.walkImage.naturalWidth || this.walkImage.width;
-            const walkNaturalHeight = this.walkImage.naturalHeight || this.walkImage.height;
+            const gaitFrame = still || Math.floor(seconds * 4.6) % 2 === 0
+                ? this.walkImage
+                : (this.walkImageAlt || this.walkImage);
+            const walkNaturalWidth = gaitFrame.naturalWidth || gaitFrame.width;
+            const walkNaturalHeight = gaitFrame.naturalHeight || gaitFrame.height;
             const walkFitScale = Math.min(465 / walkNaturalWidth, 382 / walkNaturalHeight);
             const walkWidth = walkNaturalWidth * walkFitScale;
             const walkHeight = walkNaturalHeight * walkFitScale;
-            const stride = still ? 0 : seconds * 7.6;
+            const stride = still ? 0 : seconds * Math.PI * 4.6;
             const step = Math.abs(Math.sin(stride));
-            const bob = step * 5.2;
-            const lean = still ? 0 : Math.sin(stride) * 0.018 * this.walkDirection;
-            const squash = still ? 0 : step * 0.012;
+            // The two leg poses carry the gait. Keep the torso almost level so
+            // she walks rather than hovering up and down like a paper cutout.
+            const bob = step * 1.6;
+            const lean = still ? 0 : Math.sin(stride) * 0.006 * this.walkDirection;
+            const squash = still ? 0 : step * 0.004;
             ctx.save();
             ctx.globalAlpha = alpha * walkingBlend;
             // The production plate has generous green-key margin below the paws.
@@ -694,7 +721,7 @@ export class NuojiRenderer {
             // The production plate faces left. Mirror it only while travelling right.
             ctx.scale(-this.walkDirection, 1);
             ctx.scale(1 + squash, 1 - squash * 0.7);
-            ctx.drawImage(this.walkImage, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
+            ctx.drawImage(gaitFrame, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
             ctx.restore();
         }
 
