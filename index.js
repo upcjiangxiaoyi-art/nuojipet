@@ -341,6 +341,7 @@ function syncSettingsPreviewLayer() {
 function scheduleSettingsPreviewLayer() {
     window.cancelAnimationFrame(settingsLayerFrame);
     window.clearTimeout(settingsLayerTimer);
+    window.clearTimeout(generationEndTimer);
     settingsLayerFrame = window.requestAnimationFrame(syncSettingsPreviewLayer);
     settingsLayerTimer = window.setTimeout(syncSettingsPreviewLayer, 320);
 }
@@ -783,6 +784,7 @@ function clearGenerationWatchdog() {
 function clearGenerationFinishTimer() {
     window.clearTimeout(generationFinishTimer);
     generationFinishTimer = undefined;
+    generationEndTimer = undefined;
 }
 
 function setSignalStatus(message, source = '') {
@@ -829,6 +831,7 @@ function finishThinking(bubble = '回信来啦！') {
     clearGenerationFinishTimer();
     clearGenerationWatchdog();
     isGenerating = false;
+    replyArrived = false;
     setSignalStatus('回复已到达');
     transitionTo(PET_STATES.HAPPY, {
         duration: 2100,

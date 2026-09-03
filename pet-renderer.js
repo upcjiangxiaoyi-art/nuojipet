@@ -14,8 +14,12 @@ const DESIGN_SIZE = 500;
 // that size while avoiding a 1000 x 1000 redraw on high-DPR iPhones.
 const MAX_PIXEL_RATIO = 1.5;
 const SKIN_URL = new URL('./assets/nuoji-base-v1.png', import.meta.url).href;
+const BODY_LAYER_URL = new URL('./assets/nuoji-body-v1.png', import.meta.url).href;
+const TAIL_LAYER_URL = new URL('./assets/nuoji-tail-v1.png', import.meta.url).href;
+const UNDERPAINT_LAYER_URL = new URL('./assets/nuoji-underpaint-v1.png', import.meta.url).href;
 const CLOSED_EYES_URL = new URL('./assets/nuoji-closed-eyes-v2.png', import.meta.url).href;
 const CLOSED_EYES_SOURCE = Object.freeze({ x: 305, y: 290, width: 305, height: 190 });
+const TAIL_PIVOT = Object.freeze({ x: 690, y: 760 });
 
 function ellipse(ctx, x, y, radiusX, radiusY, fillStyle) {
     ctx.beginPath();
@@ -79,14 +83,56 @@ export class NuojiRenderer {
         this.skinImage = null;
         this.skinReady = false;
         this.skinFailed = false;
+        this.layerImages = { body: null, tail: null, underpaint: null };
+        this.layersReady = false;
+        this.layersFailed = false;
         this.closedEyesImage = null;
         this.closedEyesReady = false;
         this.boundLoop = this.loop.bind(this);
         this.boundVisibilityChange = this.handleVisibilityChange.bind(this);
 
         this.resizeBackingStore();
-        this.loadSkin();
+        this.loadLayeredSkin();
         this.loadClosedEyes();
+    }
+
+    loadLayeredSkin() {
+        const sources = {
+            body: BODY_LAYER_URL,
+            tail: TAIL_LAYER_URL,
+            underpaint: UNDERPAINT_LAYER_URL,
+        };
+        let remaining = Object.keys(sources).length;
+        let failed = false;
+
+        const finishOne = () => {
+            remaining -= 1;
+            if (remaining > 0) {
+                return;
+            }
+            this.layersReady = !failed && Object.values(this.layerImages).every(Boolean);
+            this.layersFailed = failed;
+            if (failed) {
+                console.warn('[Nuoji Pet] Tail layers failed to load; keeping the still painted skin.');
+                this.loadSkin();
+            }
+            this.draw(performance.now());
+        };
+
+        for (const [name, url] of Object.entries(sources)) {
+            const image = new Image();
+            image.decoding = 'async';
+            image.addEventListener('load', () => {
+                this.layerImages[name] = image;
+                finishOne();
+            }, { once: true });
+            image.addEventListener('error', () => {
+                failed = true;
+                this.layerImages[name] = null;
+                finishOne();
+            }, { once: true });
+            image.src = url;
+        }
     }
 
     loadSkin() {
@@ -232,7 +278,7 @@ export class NuojiRenderer {
         ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
         ctx.clearRect(0, 0, DESIGN_SIZE, DESIGN_SIZE);
 
-        if (this.skinReady && this.skinImage) {
+        if ((this.skinReady && this.skinImage) || this.layersReady) {
             this.drawPaintedSkin(ctx, now);
             return;
         }
@@ -361,8 +407,9 @@ export class NuojiRenderer {
         ellipse(ctx, 251, 469, 139, 13, '#1d2832');
         ctx.restore();
 
-        const naturalWidth = this.skinImage.naturalWidth || this.skinImage.width;
-        const naturalHeight = this.skinImage.naturalHeight || this.skinImage.height;
+        const referenceImage = this.layersReady ? this.layerImages.body : this.skinImage;
+        const naturalWidth = referenceImage.naturalWidth || referenceImage.width;
+        const naturalHeight = referenceImage.naturalHeight || referenceImage.height;
         const fitScale = Math.min(438 / naturalWidth, 472 / naturalHeight);
         const drawWidth = naturalWidth * fitScale;
         const drawHeight = naturalHeight * fitScale;
@@ -372,11 +419,63 @@ export class NuojiRenderer {
         ctx.translate(250 + offsetX, 468 + offsetY);
         ctx.rotate(rotation);
         ctx.scale(scaleX, scaleY);
-        ctx.drawImage(this.skinImage, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+        if (this.layersReady) {
+            this.drawLayeredSkin(ctx, seconds, still, naturalWidth, drawWidth, drawHeight);
+        } else {
+            ctx.drawImage(this.skinImage, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+        }
         this.drawClosedEyesOverlay(ctx, now, naturalWidth, drawWidth, drawHeight);
         ctx.restore();
 
         this.drawPaintedAccents(ctx, seconds, still);
+    }
+
+    tailAngle(seconds, still) {
+        if (still) {
+            return 0;
+        }
+
+        switch (this.state) {
+            case PET_STATES.HAPPY:
+                return Math.sin(seconds * 5) * 0.11;
+            case PET_STATES.PETTING:
+                return Math.sin(seconds * 2.25) * 0.09;
+            case PET_STATES.WAVE:
+                return Math.sin(seconds * 4.2) * 0.1;
+            case PET_STATES.LISTENING:
+                return Math.sin(seconds * 2.2) * 0.045;
+            case PET_STATES.THINKING:
+                return Math.sin(seconds * 1.7) * 0.035;
+            case PET_STATES.CONFUSED:
+                return -0.02 + Math.sin(seconds * 1.4) * 0.02;
+            case PET_STATES.SLEEPING:
+                return Math.sin(seconds * 0.8) * 0.01;
+            case PET_STATES.IDLE:
+            default:
+                return Math.sin(seconds * 1.6) * 0.035;
+        }
+    }
+
+    drawLayeredSkin(ctx, seconds, still, naturalWidth, drawWidth, drawHeight) {
+        const sourceScale = drawWidth / naturalWidth;
+        const sourceLeft = -drawWidth / 2;
+        const sourceTop = -drawHeight;
+        const pivotX = sourceLeft + TAIL_PIVOT.x * sourceScale;
+        const pivotY = sourceTop + TAIL_PIVOT.y * sourceScale;
+
+        // The underpaint is never visible at rest. It only fills the slim patch
+        // behind the tail when the original painted tail swings away.
+        ctx.drawImage(this.layerImages.underpaint, sourceLeft, sourceTop, drawWidth, drawHeight);
+
+        ctx.save();
+        ctx.translate(pivotX, pivotY);
+        ctx.rotate(this.tailAngle(seconds, still));
+        ctx.translate(-pivotX, -pivotY);
+        ctx.drawImage(this.layerImages.tail, sourceLeft, sourceTop, drawWidth, drawHeight);
+        ctx.restore();
+
+        // Body and face stay pixel-identical to Nuoji's original portrait.
+        ctx.drawImage(this.layerImages.body, sourceLeft, sourceTop, drawWidth, drawHeight);
     }
 
     blinkAmount(now) {
