@@ -10,6 +10,7 @@ export const PET_STATES = Object.freeze({
 });
 
 const DESIGN_SIZE = 500;
+const SKIN_URL = new URL('./assets/nuoji-base-v1.png', import.meta.url).href;
 
 function ellipse(ctx, x, y, radiusX, radiusY, fillStyle) {
     ctx.beginPath();
@@ -50,9 +51,9 @@ function drawHeart(ctx, x, y, size, color, rotation = 0) {
 }
 
 /**
- * Dependency-free Canvas renderer for the first playable version of Nuoji.
- * It intentionally uses vector drawing so the extension works before a final
- * sprite sheet is ready and stays sharp on Retina displays.
+ * Canvas renderer for Nuoji's painted skin and lightweight state animation.
+ * The original vector kitten remains available only as an emergency fallback
+ * when the bundled transparent artwork cannot be loaded.
  */
 export class NuojiRenderer {
     constructor(canvas) {
@@ -69,10 +70,33 @@ export class NuojiRenderer {
         this.frameId = 0;
         this.lastFrameAt = 0;
         this.pulseUntil = 0;
+        this.skinImage = null;
+        this.skinReady = false;
+        this.skinFailed = false;
         this.boundLoop = this.loop.bind(this);
         this.boundVisibilityChange = this.handleVisibilityChange.bind(this);
 
         this.resizeBackingStore();
+        this.loadSkin();
+    }
+
+    loadSkin() {
+        const image = new Image();
+        image.decoding = 'async';
+        image.addEventListener('load', () => {
+            this.skinImage = image;
+            this.skinReady = true;
+            this.skinFailed = false;
+            this.draw(performance.now());
+        }, { once: true });
+        image.addEventListener('error', () => {
+            this.skinImage = null;
+            this.skinReady = false;
+            this.skinFailed = true;
+            console.warn('[Nuoji Pet] Painted skin failed to load; using the emergency fallback.');
+            this.draw(performance.now());
+        }, { once: true });
+        image.src = SKIN_URL;
     }
 
     resizeBackingStore() {
@@ -169,6 +193,16 @@ export class NuojiRenderer {
         ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
         ctx.clearRect(0, 0, DESIGN_SIZE, DESIGN_SIZE);
 
+        if (this.skinReady && this.skinImage) {
+            this.drawPaintedSkin(ctx, now);
+            return;
+        }
+
+        // Avoid flashing the old vector skin while the local PNG is decoding.
+        if (!this.skinFailed) {
+            return;
+        }
+
         const seconds = (now - this.stateStartedAt) / 1000;
         const still = this.reducedMotion;
         const sleeping = this.state === PET_STATES.SLEEPING;
@@ -205,6 +239,175 @@ export class NuojiRenderer {
         ctx.restore();
 
         ctx.restore();
+    }
+
+    drawPaintedSkin(ctx, now) {
+        const seconds = (now - this.stateStartedAt) / 1000;
+        const still = this.reducedMotion;
+        const wave = still ? 0 : Math.sin(seconds * 2.5);
+        const quickWave = still ? 0 : Math.sin(seconds * 6.2);
+        const streamPulse = !still && now < this.pulseUntil
+            ? Math.sin((this.pulseUntil - now) / 260 * Math.PI)
+            : 0;
+
+        let offsetX = 0;
+        let offsetY = 0;
+        let rotation = 0;
+        let scaleX = 1;
+        let scaleY = 1;
+        let alpha = 1;
+
+        switch (this.state) {
+            case PET_STATES.LISTENING:
+                rotation = still ? 0.018 : 0.018 + wave * 0.008;
+                scaleX = 1.008;
+                scaleY = 1.008;
+                break;
+            case PET_STATES.THINKING:
+                offsetY = still ? 0 : wave * 1.6;
+                rotation = still ? -0.008 : -0.008 + wave * 0.006;
+                break;
+            case PET_STATES.HAPPY:
+                offsetY = still ? -2 : -Math.abs(quickWave) * 7;
+                scaleX = still ? 1.01 : 1.01 + Math.abs(quickWave) * 0.012;
+                scaleY = still ? 1.01 : 1.01 - Math.abs(quickWave) * 0.006;
+                break;
+            case PET_STATES.CONFUSED:
+                offsetX = -3;
+                rotation = -0.045;
+                break;
+            case PET_STATES.PETTING:
+                offsetY = still ? 2 : 2 + Math.abs(quickWave) * 2;
+                scaleX = still ? 1.012 : 1.012 + Math.abs(quickWave) * 0.008;
+                scaleY = still ? 0.992 : 0.992 - Math.abs(quickWave) * 0.006;
+                break;
+            case PET_STATES.SLEEPING:
+                offsetY = 5;
+                rotation = -0.012;
+                scaleX = 1.006;
+                scaleY = 0.988;
+                alpha = 0.94;
+                break;
+            case PET_STATES.WAVE:
+                offsetX = still ? 0 : quickWave * 2.5;
+                rotation = still ? 0.018 : quickWave * 0.022;
+                break;
+            case PET_STATES.IDLE:
+            default: {
+                const breath = still ? 0 : Math.sin(seconds * 2.1);
+                offsetY = breath * 1.1;
+                scaleX = 1 - breath * 0.0025;
+                scaleY = 1 + breath * 0.0045;
+                break;
+            }
+        }
+
+        offsetY -= streamPulse * 2.2;
+
+        ctx.save();
+        ctx.globalAlpha = 0.13;
+        ellipse(ctx, 251, 469, 139, 13, '#1d2832');
+        ctx.restore();
+
+        const naturalWidth = this.skinImage.naturalWidth || this.skinImage.width;
+        const naturalHeight = this.skinImage.naturalHeight || this.skinImage.height;
+        const fitScale = Math.min(438 / naturalWidth, 472 / naturalHeight);
+        const drawWidth = naturalWidth * fitScale;
+        const drawHeight = naturalHeight * fitScale;
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(250 + offsetX, 468 + offsetY);
+        ctx.rotate(rotation);
+        ctx.scale(scaleX, scaleY);
+        ctx.drawImage(this.skinImage, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+        ctx.restore();
+
+        this.drawPaintedAccents(ctx, seconds, still);
+    }
+
+    drawPaintedAccents(ctx, seconds, still) {
+        if (this.state === PET_STATES.LISTENING) {
+            const pulse = still ? 0 : Math.sin(seconds * 4) * 2;
+            ctx.save();
+            ctx.strokeStyle = 'rgba(211, 163, 82, 0.78)';
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            for (let index = 0; index < 2; index += 1) {
+                ctx.beginPath();
+                ctx.arc(408, 113, 15 + index * 12 + pulse, -0.8, 0.55);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        if (this.state === PET_STATES.THINKING) {
+            for (let index = 0; index < 3; index += 1) {
+                const phase = still ? index : (index + Math.floor(seconds * 3)) % 3;
+                ctx.save();
+                ctx.globalAlpha = 0.38 + phase * 0.25;
+                ellipse(ctx, 388 + index * 22, 112 - index * 13, 6 + index, 6 + index, '#d6a457');
+                ctx.restore();
+            }
+        }
+
+        if (this.state === PET_STATES.HAPPY) {
+            const sparkle = still ? 0.85 : 0.68 + Math.sin(seconds * 7) * 0.2;
+            ctx.save();
+            ctx.globalAlpha = sparkle;
+            ctx.fillStyle = '#e7bb62';
+            for (const [x, y, size] of [[72, 151, 9], [419, 176, 8], [389, 91, 6]]) {
+                ctx.beginPath();
+                ctx.moveTo(x, y - size);
+                ctx.lineTo(x + size * 0.3, y - size * 0.3);
+                ctx.lineTo(x + size, y);
+                ctx.lineTo(x + size * 0.3, y + size * 0.3);
+                ctx.lineTo(x, y + size);
+                ctx.lineTo(x - size * 0.3, y + size * 0.3);
+                ctx.lineTo(x - size, y);
+                ctx.lineTo(x - size * 0.3, y - size * 0.3);
+                ctx.closePath();
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+
+        if (this.state === PET_STATES.CONFUSED) {
+            ctx.save();
+            ctx.translate(405, 106);
+            ctx.rotate(0.1);
+            ctx.font = '700 48px ui-rounded, system-ui, sans-serif';
+            ctx.fillStyle = '#bd8741';
+            ctx.fillText('?', 0, 0);
+            ctx.restore();
+        }
+
+        if (this.state === PET_STATES.PETTING) {
+            const rise = still ? 0 : (seconds * 20) % 16;
+            drawHeart(ctx, 79, 151 - rise * 0.22, 24, '#e99aa1', -0.2);
+            drawHeart(ctx, 408, 119 - rise * 0.35, 30, '#e5aa73', 0.18);
+            drawHeart(ctx, 433, 161 - rise * 0.15, 17, '#e99aa1', 0.12);
+        }
+
+        if (this.state === PET_STATES.SLEEPING) {
+            const rise = still ? 0 : (seconds * 16) % 27;
+            ctx.save();
+            ctx.globalAlpha = 0.72;
+            ctx.font = '700 27px ui-rounded, system-ui, sans-serif';
+            ctx.fillStyle = '#8798a8';
+            ctx.fillText('z', 385, 129 - rise * 0.23);
+            ctx.font = '700 37px ui-rounded, system-ui, sans-serif';
+            ctx.fillText('Z', 409, 101 - rise * 0.4);
+            ctx.restore();
+        }
+
+        if (this.state === PET_STATES.WAVE) {
+            const opacity = still ? 0.8 : 0.62 + Math.sin(seconds * 7) * 0.2;
+            ctx.save();
+            ctx.globalAlpha = opacity;
+            drawHeart(ctx, 416, 139, 20, '#e6a477', 0.18);
+            ctx.restore();
+        }
     }
 
     drawShadow(ctx, bodyY) {

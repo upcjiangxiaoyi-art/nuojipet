@@ -2,7 +2,7 @@
 
 一只住在 SillyTavern 页面里的银白猫狐。糯叽会听你说话、陪模型思考、迎接新回复，也可以被拖到屏幕上任意位置——但我们不把她喂成可露丽那么胖。
 
-这是 GPT × Ripple 一起搓的首个可玩版本 `v0.1.0`。
+这是 GPT × Ripple 一起搓的精致换毛版 `v0.2.0`。
 
 ![糯叽的八种首版状态](docs/state-preview.png)
 
@@ -22,7 +22,7 @@
 - 适配 iPhone 安全视口、触摸拖动和屏幕旋转
 - 不调用模型、不发送聊天内容、不额外消耗 token
 
-首版造型由 Canvas 程序实时绘制，所以开箱即用、Retina 屏也清楚。之后可以保持事件和交互代码不变，只替换成精细透明动画素材。
+`v0.2.0` 已将首版的圆滚滚程序造型替换为透明 2.5D 银白猫狐皮肤；Canvas 继续负责呼吸、倾头、跳跃与状态特效。旧造型只在皮肤文件意外加载失败时应急出现。
 
 ## 本地安装测试
 
@@ -71,8 +71,10 @@ window.NuojiPet.react('sleeping', '困嘟嘟…', 3000);
 ## 文件
 
 - `manifest.json`：SillyTavern 扩展清单
+- `CHANGELOG.md`：版本更新记录
 - `index.js`：事件、拖动、设置与状态机
-- `pet-renderer.js`：银白猫狐 Canvas 动画
+- `pet-renderer.js`：2.5D 皮肤播放器、状态动画与应急绘制
+- `assets/nuoji-base-v1.png`：糯叽透明主皮肤
 - `style.css`：悬浮层、手机适配和设置面板样式
 - `settings.html`：酒馆扩展设置界面
 - `preview.html`：不启动酒馆也能检查动作的本地预览页
