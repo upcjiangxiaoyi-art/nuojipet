@@ -9,6 +9,7 @@ const HIT_RADIUS_TOUCH = 14;
 const HIT_RADIUS_MOUSE = 3;
 const CLICK_GUARD_DURATION = 900;
 const CLICK_GUARD_RADIUS = 36;
+const GENERATION_SETTLE_DELAY = 520;
 const SEND_BUTTON_SELECTOR = '#send_but';
 const STOP_BUTTON_SELECTOR = '#mes_stop';
 
@@ -36,6 +37,7 @@ const stateLabels = Object.freeze({
 });
 
 let context;
+let coreApi;
 let settings;
 let renderer;
 let ui;
@@ -48,6 +50,7 @@ let bootTimer;
 let settingsLayerFrame;
 let settingsLayerTimer;
 let generationWatchdog;
+let generationFinishTimer;
 let chatActivityFrame;
 let chatObserver;
 let generationControlFrame;
@@ -396,6 +399,8 @@ function bindSettingsControls() {
             settings.showBubble = event.currentTarget.checked;
             if (!settings.showBubble) {
                 hideBubble();
+            } else if (isGenerating) {
+                showBubble('让我想想…', 0);
             }
             saveSettings();
         });
@@ -723,7 +728,9 @@ function returnToAmbient() {
     renderer?.setState(ambientState);
     ui?.root.setAttribute('aria-label', stateLabels[ambientState]);
 
-    if (!isGenerating) {
+    if (isGenerating) {
+        showBubble('让我想想…', 0);
+    } else {
         hideBubble();
     }
 }
@@ -734,28 +741,48 @@ function showBubble(message, duration = 1500) {
     }
 
     window.clearTimeout(bubbleTimer);
+    bubbleTimer = undefined;
     ui.bubble.textContent = message;
     ui.bubble.classList.add('is-visible');
-    bubbleTimer = window.setTimeout(hideBubble, duration);
+    if (Number.isFinite(duration) && duration > 0) {
+        bubbleTimer = window.setTimeout(hideBubble, duration);
+    }
 }
 
 function hideBubble() {
     window.clearTimeout(bubbleTimer);
+    bubbleTimer = undefined;
     ui?.bubble.classList.remove('is-visible');
 }
 
 function listen(eventName, handler) {
-    const eventType = context.event_types?.[eventName];
-    if (!eventType) {
+    const source = coreApi?.eventSource ?? context.eventSource;
+    const eventType = coreApi?.event_types?.[eventName] ?? context.event_types?.[eventName];
+    if (!source || !eventType) {
         return;
     }
 
-    onEventSource(context.eventSource, eventType, handler);
+    onEventSource(source, eventType, handler);
+}
+
+async function loadSillyTavernCoreApi() {
+    try {
+        // Same stable public-module bridge used by the reference typing
+        // indicator. Context remains the fallback for older layouts.
+        return await import('../../../../script.js');
+    } catch {
+        return undefined;
+    }
 }
 
 function clearGenerationWatchdog() {
     window.clearTimeout(generationWatchdog);
     generationWatchdog = undefined;
+}
+
+function clearGenerationFinishTimer() {
+    window.clearTimeout(generationFinishTimer);
+    generationFinishTimer = undefined;
 }
 
 function setSignalStatus(message, source = '') {
@@ -770,9 +797,9 @@ function setSignalStatus(message, source = '') {
 }
 
 function beginThinking(source = 'event') {
-    const wasAlreadyThinking = isGenerating && renderer?.state === PET_STATES.THINKING;
     isGenerating = true;
     setSignalStatus('已收到发送，正在等回信', typeof source === 'string' ? source : 'event');
+    clearGenerationFinishTimer();
     clearGenerationWatchdog();
     generationWatchdog = window.setTimeout(() => {
         if (!isGenerating) {
@@ -790,19 +817,35 @@ function beginThinking(source = 'event') {
     }, 180000);
 
     transitionTo(PET_STATES.THINKING, {
-        bubble: wasAlreadyThinking ? '' : '让我想想…',
         priority: 25,
         force: true,
     });
+    // A typing indicator should remain visible for the entire generation,
+    // not just for the first animation beat.
+    showBubble('让我想想…', 0);
 }
 
 function finishThinking(bubble = '回信来啦！') {
+    clearGenerationFinishTimer();
     clearGenerationWatchdog();
     isGenerating = false;
     setSignalStatus('回复已到达');
     transitionTo(PET_STATES.HAPPY, {
         duration: 2100,
         bubble,
+        priority: 35,
+        force: true,
+    });
+}
+
+function stopThinkingManually() {
+    clearGenerationFinishTimer();
+    clearGenerationWatchdog();
+    isGenerating = false;
+    setSignalStatus('生成已手动停止');
+    transitionTo(PET_STATES.CONFUSED, {
+        duration: 1700,
+        bubble: '停在这里嘛？',
         priority: 35,
         force: true,
     });
@@ -838,7 +881,11 @@ function inspectChatActivity() {
         if (entry?.is_user === true) {
             beginThinking('chat-observer');
         } else if (entry?.is_user === false && isGenerating) {
-            finishThinking();
+            if (streamingModeIsEnabled() || stopControlIsActive()) {
+                setSignalStatus('已看到流式开头，继续等完整回信', 'chat-observer');
+            } else {
+                scheduleGenerationFinish('chat-observer');
+            }
         }
     }
 }
@@ -876,6 +923,40 @@ function controlIsVisible(element) {
     return styles.display !== 'none' && styles.visibility !== 'hidden' && styles.opacity !== '0';
 }
 
+function stopControlIsActive() {
+    return controlIsVisible(document.getElementById('mes_stop'));
+}
+
+function streamingModeIsEnabled() {
+    const check = coreApi?.isStreamingEnabled ?? context?.isStreamingEnabled;
+    if (typeof check !== 'function') {
+        return false;
+    }
+
+    try {
+        return Boolean(check());
+    } catch {
+        return false;
+    }
+}
+
+function scheduleGenerationFinish(source = 'settled') {
+    if (!isGenerating) {
+        return;
+    }
+
+    clearGenerationFinishTimer();
+    generationFinishTimer = window.setTimeout(() => {
+        generationFinishTimer = undefined;
+        if (!isGenerating || stopControlIsActive()) {
+            return;
+        }
+
+        finishThinking();
+        setSignalStatus('完整回复已到达', source);
+    }, GENERATION_SETTLE_DELAY);
+}
+
 function handleDirectGenerationControl(event) {
     const sendButton = closestSignalControl(event.target, SEND_BUTTON_SELECTOR);
     if (sendButton) {
@@ -896,21 +977,17 @@ function syncGenerationControls() {
     const nextActive = controlIsVisible(document.getElementById('mes_stop'));
 
     if (nextActive && !generationControlActive) {
+        clearGenerationFinishTimer();
         generationWasManuallyStopped = false;
         beginThinking('stop-button');
     } else if (!nextActive && generationControlActive && isGenerating) {
         if (generationWasManuallyStopped) {
-            clearGenerationWatchdog();
-            isGenerating = false;
-            setSignalStatus('生成已手动停止');
-            transitionTo(PET_STATES.CONFUSED, {
-                duration: 1700,
-                bubble: '停在这里嘛？',
-                priority: 35,
-                force: true,
-            });
+            stopThinkingManually();
         } else {
-            finishThinking();
+            // SillyTavern may briefly swap controls while a streaming request
+            // is still settling. Match proven typing-indicator behaviour by
+            // requiring the Stop control to remain hidden for a short beat.
+            scheduleGenerationFinish('stop-button-hidden');
         }
     }
 
@@ -930,18 +1007,28 @@ function bindDirectInputSignals() {
     const controls = [
         document.getElementById('send_but'),
         document.getElementById('mes_stop'),
-        document.getElementById('rightSendForm'),
     ].filter(Boolean);
+    const controlsHost = document.getElementById('rightSendForm');
 
     generationControlActive = controlIsVisible(document.getElementById('mes_stop'));
     if (generationControlActive) {
         beginThinking('stop-button');
     }
 
-    if (controls.length && typeof MutationObserver === 'function') {
+    if ((controls.length || controlsHost) && typeof MutationObserver === 'function') {
         generationControlObserver = new MutationObserver(scheduleGenerationControlSync);
         for (const control of controls) {
             generationControlObserver.observe(control, {
+                attributes: true,
+                attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
+            });
+        }
+        if (controlsHost) {
+            // Some themes replace the Send / Stop nodes instead of only
+            // changing their style. Observing the stable form catches both.
+            generationControlObserver.observe(controlsHost, {
+                childList: true,
+                subtree: true,
                 attributes: true,
                 attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
             });
@@ -967,7 +1054,19 @@ function bindSillyTavernEvents() {
     });
 
     listen('MESSAGE_RECEIVED', () => {
-        finishThinking();
+        if (!isGenerating) {
+            return;
+        }
+
+        // In streaming mode this can fire when the assistant message shell is
+        // created, before the response is actually complete.
+        if (streamingModeIsEnabled() || stopControlIsActive()) {
+            setSignalStatus('已收到流式开头，继续等完整回信', 'MESSAGE_RECEIVED');
+            renderer?.pulse();
+            return;
+        }
+
+        scheduleGenerationFinish('MESSAGE_RECEIVED');
     });
 
     listen('CHARACTER_MESSAGE_RENDERED', () => {
@@ -977,32 +1076,26 @@ function bindSillyTavernEvents() {
     });
 
     listen('GENERATION_STOPPED', () => {
-        clearGenerationWatchdog();
-        isGenerating = false;
-        setSignalStatus('生成已手动停止');
-        transitionTo(PET_STATES.CONFUSED, {
-            duration: 1900,
-            bubble: '停在这里嘛？',
-            priority: 35,
-            force: true,
-        });
+        stopThinkingManually();
     });
 
     listen('GENERATION_ENDED', () => {
-        clearGenerationWatchdog();
-        isGenerating = false;
-        setSignalStatus('生成已经结束');
-        if (renderer?.state === PET_STATES.THINKING) {
-            transitionTo(PET_STATES.CONFUSED, {
-                duration: 1500,
-                bubble: '欸，结束啦？',
-                priority: 25,
-                force: true,
-            });
+        if (!isGenerating) {
+            return;
         }
+
+        // The reference typing indicator deliberately does not close on this
+        // event during streaming. The Stop control and final render are the
+        // authoritative completion signals.
+        setSignalStatus('生成正在收尾，继续等完整回信', 'GENERATION_ENDED');
+        if (streamingModeIsEnabled()) {
+            return;
+        }
+        scheduleGenerationFinish('GENERATION_ENDED');
     });
 
     listen('CHAT_CHANGED', () => {
+        clearGenerationFinishTimer();
         clearGenerationWatchdog();
         isGenerating = false;
         setSignalStatus('已切换聊天，等待发送');
@@ -1062,6 +1155,7 @@ export function destroy() {
     window.cancelAnimationFrame(hoverFrame);
     window.cancelAnimationFrame(settingsLayerFrame);
     window.clearTimeout(settingsLayerTimer);
+    clearGenerationFinishTimer();
     clearGenerationWatchdog();
     window.cancelAnimationFrame(chatActivityFrame);
     window.cancelAnimationFrame(generationControlFrame);
@@ -1074,6 +1168,7 @@ export function destroy() {
     }
 
     context = undefined;
+    coreApi = undefined;
     settings = undefined;
     renderer = undefined;
     ui = undefined;
@@ -1086,6 +1181,7 @@ export function destroy() {
     settingsLayerFrame = undefined;
     settingsLayerTimer = undefined;
     generationWatchdog = undefined;
+    generationFinishTimer = undefined;
     chatActivityFrame = undefined;
     chatObserver = undefined;
     generationControlFrame = undefined;
@@ -1123,6 +1219,7 @@ async function initialize() {
         }
 
         context = SillyTavern.getContext();
+        coreApi = await loadSillyTavernCoreApi();
         settings = getSettings();
         ui = createPetUi();
         renderer = new NuojiRenderer(ui.canvas);

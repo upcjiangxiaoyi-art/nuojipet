@@ -14,7 +14,7 @@ const DESIGN_SIZE = 500;
 // that size while avoiding a 1000 x 1000 redraw on high-DPR iPhones.
 const MAX_PIXEL_RATIO = 1.5;
 const SKIN_URL = new URL('./assets/nuoji-base-v1.png', import.meta.url).href;
-const CLOSED_EYES_URL = new URL('./assets/nuoji-closed-eyes-v1.png', import.meta.url).href;
+const CLOSED_EYES_URL = new URL('./assets/nuoji-closed-eyes-v2.png', import.meta.url).href;
 const CLOSED_EYES_SOURCE = Object.freeze({ x: 305, y: 290, width: 305, height: 190 });
 
 function ellipse(ctx, x, y, radiusX, radiusY, fillStyle) {
@@ -303,8 +303,21 @@ export class NuojiRenderer {
                 scaleY = 1.008;
                 break;
             case PET_STATES.THINKING:
-                offsetY = still ? 0 : wave * 1.6;
-                rotation = still ? -0.008 : -0.008 + wave * 0.006;
+                if (still) {
+                    rotation = -0.008;
+                } else {
+                    // Two tiny nods followed by a short attentive pause. The
+                    // motion stays obvious at iPhone scale without turning the
+                    // whole cat into a bouncing ball.
+                    const nodWindow = seconds % 2.8;
+                    const nod = nodWindow < 1.1
+                        ? Math.sin((nodWindow / 1.1) * Math.PI * 2) ** 2
+                        : 0;
+                    offsetY = nod * 6.5;
+                    rotation = -0.008 + Math.sin(seconds * 1.4) * 0.003;
+                    scaleX = 1 + nod * 0.004;
+                    scaleY = 1 - nod * 0.01;
+                }
                 break;
             case PET_STATES.HAPPY:
                 offsetY = still ? -2 : -Math.abs(quickWave) * 7;
