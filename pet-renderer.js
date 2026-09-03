@@ -21,14 +21,15 @@ const LEFT_EAR_LAYER_URL = new URL('./assets/nuoji-ear-left-v1.png', import.meta
 const RIGHT_EAR_LAYER_URL = new URL('./assets/nuoji-ear-right-v1.png', import.meta.url).href;
 const CLOSED_EYES_URL = new URL('./assets/nuoji-closed-eyes-v2.png', import.meta.url).href;
 const LYING_GREEN_URL = new URL('./assets/nuoji-lying-green-v1.png', import.meta.url).href;
+const LYING_CLOSED_EYES_URL = new URL('./assets/nuoji-lying-closed-eyes-v1.png', import.meta.url).href;
 const BALL_GREEN_URL = new URL('./assets/nuoji-ball-green-v1.png', import.meta.url).href;
 const WALK_GREEN_URL = new URL('./assets/nuoji-walk-green-v1.png', import.meta.url).href;
 const WALK_LAYER_URLS = Object.freeze({
     body: new URL('./assets/nuoji-walk-body-v1.png', import.meta.url).href,
     underpaint: new URL('./assets/nuoji-walk-underpaint-v1.png', import.meta.url).href,
-    frontNear: new URL('./assets/nuoji-walk-leg-front-near-v1.png', import.meta.url).href,
+    frontNear: new URL('./assets/nuoji-walk-leg-front-near-v2.png', import.meta.url).href,
     frontFar: new URL('./assets/nuoji-walk-leg-front-far-v1.png', import.meta.url).href,
-    hindNear: new URL('./assets/nuoji-walk-leg-hind-near-v1.png', import.meta.url).href,
+    hindNear: new URL('./assets/nuoji-walk-leg-hind-near-v2.png', import.meta.url).href,
     hindFar: new URL('./assets/nuoji-walk-leg-hind-far-v1.png', import.meta.url).href,
 });
 const TAU = Math.PI * 2;
@@ -195,6 +196,9 @@ export class NuojiRenderer {
         this.lyingImage = null;
         this.lyingReady = false;
         this.lyingLoading = false;
+        this.lyingClosedEyesImage = null;
+        this.lyingClosedEyesReady = false;
+        this.lyingClosedEyesLoading = false;
         this.ballImage = null;
         this.ballReady = false;
         this.ballLoading = false;
@@ -322,6 +326,28 @@ export class NuojiRenderer {
             console.warn('[Nuoji Pet] Lying pose failed to load; keeping the sitting pose.');
         }, { once: true });
         image.src = LYING_GREEN_URL;
+    }
+
+    loadLyingClosedEyes() {
+        if (this.lyingClosedEyesReady || this.lyingClosedEyesLoading) {
+            return;
+        }
+        this.lyingClosedEyesLoading = true;
+        const image = new Image();
+        image.decoding = 'async';
+        image.addEventListener('load', () => {
+            this.lyingClosedEyesImage = image;
+            this.lyingClosedEyesReady = true;
+            this.lyingClosedEyesLoading = false;
+            this.draw(performance.now());
+        }, { once: true });
+        image.addEventListener('error', () => {
+            this.lyingClosedEyesImage = null;
+            this.lyingClosedEyesReady = false;
+            this.lyingClosedEyesLoading = false;
+            console.warn('[Nuoji Pet] Lying closed-eye layer failed to load; keeping the reclining eyes open.');
+        }, { once: true });
+        image.src = LYING_CLOSED_EYES_URL;
     }
 
     loadBallSkin() {
@@ -468,6 +494,10 @@ export class NuojiRenderer {
             this.stateStartedAt = performance.now();
         }
 
+        if (nextState === PET_STATES.SLEEPING) {
+            this.loadLyingClosedEyes();
+        }
+
         this.draw(performance.now());
     }
 
@@ -585,6 +615,9 @@ export class NuojiRenderer {
         this.stop();
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this.lyingImage = null;
+        this.lyingClosedEyesImage = null;
+        this.lyingClosedEyesReady = false;
+        this.lyingClosedEyesLoading = false;
         this.ballImage = null;
         this.walkImage = null;
         this.walkLayers = {
@@ -803,6 +836,15 @@ export class NuojiRenderer {
             ctx.translate(250, 468 + (1 - lyingBlend) * 16);
             ctx.scale(1 - (1 - lyingBlend) * 0.04, 0.94 + lyingBlend * 0.06 + lyingBreath);
             ctx.drawImage(this.lyingImage, -lyingWidth / 2, -lyingHeight, lyingWidth, lyingHeight);
+            if (this.state === PET_STATES.SLEEPING && this.lyingClosedEyesReady) {
+                ctx.drawImage(
+                    this.lyingClosedEyesImage,
+                    -lyingWidth / 2,
+                    -lyingHeight,
+                    lyingWidth,
+                    lyingHeight,
+                );
+            }
             ctx.restore();
         }
 
