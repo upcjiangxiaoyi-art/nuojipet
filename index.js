@@ -9,6 +9,11 @@ const HIT_RADIUS_TOUCH = 14;
 const HIT_RADIUS_MOUSE = 3;
 const CLICK_GUARD_DURATION = 900;
 const CLICK_GUARD_RADIUS = 36;
+const DOUBLE_TAP_WINDOW = 320;
+const DOUBLE_TAP_RADIUS = 42;
+const LONG_PRESS_DURATION = 600;
+const TYPING_IDLE_DELAY = 3000;
+const THINKING_COMPANION_DELAY = 20000;
 const GENERATION_SETTLE_DELAY = 520;
 const SEND_BUTTON_SELECTOR = '#send_but';
 const STOP_BUTTON_SELECTOR = '#mes_stop';
@@ -64,6 +69,13 @@ let priorityUntil = 0;
 let isGenerating = false;
 let publicApi;
 let clickGuard;
+let longPressTimer;
+let pendingTap;
+let typingIdleTimer;
+let typingAttentionActive = false;
+let thinkingBubble20Timer;
+let thinkingBubble40Timer;
+let thinkingCompanionMessage = '让我想想…';
 
 const cleanups = [];
 
@@ -91,6 +103,7 @@ const drag = {
     startY: 0,
     startLeft: 0,
     startTop: 0,
+    longPress: false,
 };
 
 function cloneDefaults() {
@@ -166,7 +179,7 @@ function createPetUi() {
     root.innerHTML = `
         <div class="nuoji-speech" aria-live="polite"></div>
         <canvas class="nuoji-canvas" width="500" height="500" aria-hidden="true"></canvas>
-        <span class="nuoji-drag-hint" aria-hidden="true">拖动我 · 点我摸摸</span>
+        <span class="nuoji-drag-hint" aria-hidden="true">拖动 · 点摸摸 · 长按抱抱</span>
     `;
 
     document.body.append(root);
@@ -183,7 +196,9 @@ function createPetUi() {
     on(document, 'pointermove', handlePointerMove, { capture: true, passive: false });
     on(document, 'pointerup', handlePointerUp, { capture: true });
     on(document, 'pointercancel', handlePointerCancel, { capture: true });
+    on(document, 'contextmenu', handleContextMenuGuard, { capture: true });
     on(document, 'pointermove', handleHoverHint, { passive: true });
+    on(document, 'input', handleTypingInput, { capture: true, passive: true });
     on(root, 'keydown', handlePetKeydown);
 
     return { root, canvas, bubble, hint };
@@ -595,7 +610,9 @@ function handlePointerDown(event) {
     drag.startY = event.clientY;
     drag.startLeft = rect.left;
     drag.startTop = rect.top;
+    drag.longPress = false;
     ui.root.classList.add('is-pressed');
+    scheduleLongPress();
     armClickGuard(event);
     event.preventDefault();
 }
@@ -609,6 +626,7 @@ function handlePointerMove(event) {
     const deltaY = event.clientY - drag.startY;
     if (!drag.moved && Math.hypot(deltaX, deltaY) >= DRAG_THRESHOLD) {
         drag.moved = true;
+        clearLongPressTimer();
         ui.root.classList.add('is-dragging');
         transitionTo(PET_STATES.LISTENING, {
             bubble: '带我去哪呀？',
@@ -634,6 +652,9 @@ function handlePointerUp(event) {
     event.preventDefault();
     armClickGuard(event);
     const wasDragged = drag.moved;
+    const wasLongPress = drag.longPress;
+    const tapX = event.clientX;
+    const tapY = event.clientY;
     finishPointerInteraction();
 
     if (wasDragged) {
@@ -644,8 +665,10 @@ function handlePointerUp(event) {
             priority: 35,
             force: true,
         });
+    } else if (wasLongPress) {
+        returnToAmbient();
     } else {
-        petNuoji();
+        registerTap(tapX, tapY);
     }
 }
 
@@ -658,18 +681,142 @@ function handlePointerCancel(event) {
     event.preventDefault();
     armClickGuard(event);
     const wasDragged = drag.moved;
+    const wasLongPress = drag.longPress;
     finishPointerInteraction();
     if (wasDragged) {
         rememberCurrentPosition();
     }
-    returnToAmbient();
+    if (wasDragged || wasLongPress) {
+        returnToAmbient();
+    }
 }
 
 function finishPointerInteraction() {
+    clearLongPressTimer();
     ui.root.classList.remove('is-pressed', 'is-dragging');
     drag.active = false;
     drag.moved = false;
     drag.pointerId = null;
+    drag.longPress = false;
+}
+
+function clearLongPressTimer() {
+    window.clearTimeout(longPressTimer);
+    longPressTimer = undefined;
+}
+
+function scheduleLongPress() {
+    clearLongPressTimer();
+    longPressTimer = window.setTimeout(() => {
+        longPressTimer = undefined;
+        if (!drag.active || drag.moved) {
+            return;
+        }
+
+        drag.longPress = true;
+        transitionTo(PET_STATES.PETTING, {
+            bubble: '呼噜呼噜呼噜～',
+            priority: 55,
+            force: true,
+        });
+    }, LONG_PRESS_DURATION);
+}
+
+function clearPendingTap() {
+    window.clearTimeout(pendingTap?.timer);
+    pendingTap = undefined;
+}
+
+function registerTap(clientX, clientY) {
+    const now = Date.now();
+    if (
+        pendingTap
+        && now - pendingTap.time <= DOUBLE_TAP_WINDOW
+        && Math.hypot(clientX - pendingTap.x, clientY - pendingTap.y) <= DOUBLE_TAP_RADIUS
+    ) {
+        clearPendingTap();
+        doublePetNuoji();
+        return;
+    }
+
+    clearPendingTap();
+    const tap = { time: now, x: clientX, y: clientY, timer: undefined };
+    tap.timer = window.setTimeout(() => {
+        if (pendingTap === tap) {
+            pendingTap = undefined;
+            petNuoji();
+        }
+    }, DOUBLE_TAP_WINDOW);
+    pendingTap = tap;
+}
+
+function doublePetNuoji() {
+    transitionTo(PET_STATES.HAPPY, {
+        duration: 2200,
+        bubble: '翻个软乎乎的小肚皮～',
+        priority: 48,
+        force: true,
+    });
+}
+
+function handleContextMenuGuard(event) {
+    if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+        return;
+    }
+    if (!drag.active && !hitsNuoji(event.clientX, event.clientY, 'touch')) {
+        return;
+    }
+    event.stopImmediatePropagation();
+    event.preventDefault();
+}
+
+function isSendTextarea(target) {
+    return target?.id === 'send_textarea' || target?.matches?.('#send_textarea');
+}
+
+function clearTypingAttention({ restore = false } = {}) {
+    window.clearTimeout(typingIdleTimer);
+    typingIdleTimer = undefined;
+    const wasActive = typingAttentionActive;
+    typingAttentionActive = false;
+    if (restore && wasActive && !isGenerating && !drag.active) {
+        returnToAmbient();
+    }
+}
+
+function handleTypingInput(event) {
+    if (!isSendTextarea(event.target)) {
+        return;
+    }
+
+    const hasText = String(event.target.value ?? '').trim().length > 0;
+    if (!hasText) {
+        clearTypingAttention({ restore: true });
+        return;
+    }
+    if (isGenerating || drag.longPress) {
+        return;
+    }
+
+    const firstKeystroke = !typingAttentionActive;
+    typingAttentionActive = true;
+    window.clearTimeout(typingIdleTimer);
+    if (firstKeystroke || renderer?.state !== PET_STATES.LISTENING) {
+        transitionTo(PET_STATES.LISTENING, {
+            priority: 22,
+            force: true,
+        });
+    }
+    if (firstKeystroke) {
+        showBubble('我在看你写～', 1400);
+    }
+    typingIdleTimer = window.setTimeout(() => {
+        typingIdleTimer = undefined;
+        typingAttentionActive = false;
+        if (!isGenerating && !drag.active) {
+            returnToAmbient();
+        }
+    }, TYPING_IDLE_DELAY);
 }
 
 function handlePetKeydown(event) {
@@ -730,7 +877,7 @@ function returnToAmbient() {
     ui?.root.setAttribute('aria-label', stateLabels[ambientState]);
 
     if (isGenerating) {
-        showBubble('让我想想…', 0);
+        showBubble(thinkingCompanionMessage, 0);
     } else {
         hideBubble();
     }
@@ -787,6 +934,36 @@ function clearGenerationFinishTimer() {
     generationEndTimer = undefined;
 }
 
+function clearThinkingCompanionTimers({ resetMessage = true } = {}) {
+    window.clearTimeout(thinkingBubble20Timer);
+    window.clearTimeout(thinkingBubble40Timer);
+    thinkingBubble20Timer = undefined;
+    thinkingBubble40Timer = undefined;
+    if (resetMessage) {
+        thinkingCompanionMessage = '让我想想…';
+    }
+}
+
+function scheduleThinkingCompanionBubbles() {
+    clearThinkingCompanionTimers();
+    thinkingBubble20Timer = window.setTimeout(() => {
+        thinkingBubble20Timer = undefined;
+        if (!isGenerating) {
+            return;
+        }
+        thinkingCompanionMessage = '这次想得久哦～';
+        showBubble(thinkingCompanionMessage, 0);
+    }, THINKING_COMPANION_DELAY);
+    thinkingBubble40Timer = window.setTimeout(() => {
+        thinkingBubble40Timer = undefined;
+        if (!isGenerating) {
+            return;
+        }
+        thinkingCompanionMessage = '还在想呢…';
+        showBubble(thinkingCompanionMessage, 0);
+    }, THINKING_COMPANION_DELAY * 2);
+}
+
 function setSignalStatus(message, source = '') {
     lastSignalStatus = message;
     const status = document.getElementById('nuoji-signal-status');
@@ -799,6 +976,8 @@ function setSignalStatus(message, source = '') {
 }
 
 function beginThinking(source = 'event') {
+    clearTypingAttention();
+    clearPendingTap();
     isGenerating = true;
     setSignalStatus('已收到发送，正在等回信', typeof source === 'string' ? source : 'event');
     clearGenerationFinishTimer();
@@ -809,6 +988,7 @@ function beginThinking(source = 'event') {
         }
 
         isGenerating = false;
+        clearThinkingCompanionTimers();
         setSignalStatus('等待超时，已经回到陪伴');
         transitionTo(PET_STATES.CONFUSED, {
             duration: 1700,
@@ -825,11 +1005,13 @@ function beginThinking(source = 'event') {
     // A typing indicator should remain visible for the entire generation,
     // not just for the first animation beat.
     showBubble('让我想想…', 0);
+    scheduleThinkingCompanionBubbles();
 }
 
 function finishThinking(bubble = '回信来啦！') {
     clearGenerationFinishTimer();
     clearGenerationWatchdog();
+    clearThinkingCompanionTimers();
     isGenerating = false;
     replyArrived = false;
     setSignalStatus('回复已到达');
@@ -844,6 +1026,7 @@ function finishThinking(bubble = '回信来啦！') {
 function stopThinkingManually() {
     clearGenerationFinishTimer();
     clearGenerationWatchdog();
+    clearThinkingCompanionTimers();
     isGenerating = false;
     setSignalStatus('生成已手动停止');
     transitionTo(PET_STATES.CONFUSED, {
@@ -1058,6 +1241,8 @@ let generationEndTimer;
  */
 function bindSillyTavernEvents() {
     listen('MESSAGE_SENT', () => {
+        clearTypingAttention();
+        clearPendingTap();
         transitionTo(PET_STATES.LISTENING, { duration: 1200, bubble: '嗯嗯，我在听', priority: 25, force: true });
     });
 
@@ -1096,6 +1281,7 @@ function bindSillyTavernEvents() {
             return;
         }
         clearGenerationWatchdog();
+        clearThinkingCompanionTimers();
         isGenerating = false;
         if (replyArrived) {
             return; // non-streaming: HAPPY already played
@@ -1113,6 +1299,8 @@ function bindSillyTavernEvents() {
     });
 
     listen('CHAT_CHANGED', () => {
+        clearTypingAttention();
+        clearThinkingCompanionTimers();
         clearGenerationWatchdog();
         window.clearTimeout(generationEndTimer);
         generationEndTimer = undefined;
@@ -1170,6 +1358,10 @@ export function destroy() {
     window.clearTimeout(settingsLayerTimer);
     clearGenerationFinishTimer();
     clearGenerationWatchdog();
+    clearThinkingCompanionTimers();
+    clearTypingAttention();
+    clearLongPressTimer();
+    clearPendingTap();
     window.cancelAnimationFrame(chatActivityFrame);
     window.cancelAnimationFrame(generationControlFrame);
     renderer?.destroy();
@@ -1211,6 +1403,7 @@ export function destroy() {
     drag.active = false;
     drag.moved = false;
     drag.pointerId = null;
+    drag.longPress = false;
 }
 
 export function onDisable() {
