@@ -10,6 +10,9 @@ export const PET_STATES = Object.freeze({
 });
 
 const DESIGN_SIZE = 500;
+// The pet is at most 303 CSS px wide. A 750 px backing store remains crisp at
+// that size while avoiding a 1000 x 1000 redraw on high-DPR iPhones.
+const MAX_PIXEL_RATIO = 1.5;
 const SKIN_URL = new URL('./assets/nuoji-base-v1.png', import.meta.url).href;
 
 function ellipse(ctx, x, y, radiusX, radiusY, fillStyle) {
@@ -66,6 +69,7 @@ export class NuojiRenderer {
         this.state = PET_STATES.IDLE;
         this.stateStartedAt = performance.now();
         this.reducedMotion = false;
+        this.settingsPreviewMode = false;
         this.running = false;
         this.frameId = 0;
         this.lastFrameAt = 0;
@@ -100,7 +104,7 @@ export class NuojiRenderer {
     }
 
     resizeBackingStore() {
-        const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+        const pixelRatio = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO);
         const size = Math.round(DESIGN_SIZE * pixelRatio);
 
         if (this.canvas.width !== size || this.canvas.height !== size) {
@@ -127,6 +131,16 @@ export class NuojiRenderer {
 
     setReducedMotion(enabled) {
         this.reducedMotion = Boolean(enabled);
+        this.draw(performance.now());
+    }
+
+    setSettingsPreviewMode(enabled) {
+        const nextValue = Boolean(enabled);
+        if (this.settingsPreviewMode === nextValue) {
+            return;
+        }
+
+        this.settingsPreviewMode = nextValue;
         this.draw(performance.now());
     }
 
@@ -174,7 +188,10 @@ export class NuojiRenderer {
             return;
         }
 
-        const minimumFrameTime = this.reducedMotion ? 180 : 1000 / 24;
+        const minimumFrameTime = Math.max(
+            this.reducedMotion ? 180 : 1000 / 24,
+            this.settingsPreviewMode ? 1000 / 12 : 0,
+        );
         if (now - this.lastFrameAt >= minimumFrameTime) {
             this.draw(now);
             this.lastFrameAt = now;
@@ -356,12 +373,15 @@ export class NuojiRenderer {
         const sourceLeft = -drawWidth / 2;
         const sourceTop = -drawHeight;
         const eyes = [
-            { x: 395, y: 411, radiusX: 52, radiusY: 36, rotation: 0.06, tone: '#e5dcde' },
-            { x: 533, y: 376, radiusX: 46, radiusY: 36, rotation: -0.09, tone: '#d7cfd4' },
+            { x: 395, y: 411, radiusX: 50, radiusY: 27, rotation: 0.06, sampleY: 318, sampleHeight: 62 },
+            { x: 533, y: 376, radiusX: 45, radiusY: 27, rotation: -0.09, sampleY: 286, sampleHeight: 58 },
         ];
 
         ctx.save();
-        ctx.globalAlpha = amount;
+        // Copy Nuoji's own forehead fur over the eye instead of painting a flat
+        // grey oval. This keeps the closed lids textured and avoids the old
+        // "sunglasses" look while preserving one perfectly aligned base skin.
+        ctx.globalAlpha = Math.min(1, amount * 1.45);
         for (const eye of eyes) {
             const x = sourceLeft + eye.x * sourceScale;
             const y = sourceTop + eye.y * sourceScale;
@@ -371,18 +391,49 @@ export class NuojiRenderer {
             ctx.save();
             ctx.translate(x, y);
             ctx.rotate(eye.rotation);
-
-            const furBlend = ctx.createRadialGradient(0, 0, radiusX * 0.22, 0, 0, radiusX * 1.16);
-            furBlend.addColorStop(0, eye.tone);
-            furBlend.addColorStop(0.64, eye.tone);
-            furBlend.addColorStop(1, 'rgba(244, 246, 246, 0)');
-            ellipse(ctx, 0, 0, radiusX * 1.16, radiusY * 1.16, furBlend);
-
             ctx.beginPath();
-            ctx.moveTo(-radiusX * 0.72, 0);
-            ctx.quadraticCurveTo(0, radiusY * 0.25, radiusX * 0.72, 0);
-            ctx.strokeStyle = 'rgba(91, 88, 96, 0.78)';
-            ctx.lineWidth = Math.max(1.5, 3.2 * sourceScale);
+            ctx.moveTo(-radiusX, 0);
+            ctx.bezierCurveTo(
+                -radiusX * 0.58,
+                -radiusY,
+                radiusX * 0.58,
+                -radiusY,
+                radiusX,
+                0,
+            );
+            ctx.bezierCurveTo(
+                radiusX * 0.52,
+                radiusY * 0.82,
+                -radiusX * 0.52,
+                radiusY * 0.82,
+                -radiusX,
+                0,
+            );
+            ctx.closePath();
+            ctx.clip();
+            ctx.rotate(-eye.rotation);
+            ctx.translate(-x, -y);
+            ctx.drawImage(
+                this.skinImage,
+                eye.x - eye.radiusX,
+                eye.sampleY,
+                eye.radiusX * 2,
+                eye.sampleHeight,
+                x - radiusX,
+                y - radiusY,
+                radiusX * 2,
+                radiusY * 1.82,
+            );
+            ctx.restore();
+
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(eye.rotation);
+            ctx.beginPath();
+            ctx.moveTo(-radiusX * 0.7, radiusY * 0.02);
+            ctx.quadraticCurveTo(0, radiusY * 0.3, radiusX * 0.7, radiusY * 0.02);
+            ctx.strokeStyle = 'rgba(91, 78, 88, 0.5)';
+            ctx.lineWidth = Math.max(1.1, 2.2 * sourceScale);
             ctx.lineCap = 'round';
             ctx.stroke();
             ctx.restore();

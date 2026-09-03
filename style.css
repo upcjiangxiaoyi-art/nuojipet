@@ -23,8 +23,9 @@
     -webkit-user-drag: none;
     contain: layout style;
     isolation: isolate;
-    filter: drop-shadow(0 9px 11px rgba(17, 25, 34, 0.2));
-    transition: opacity 160ms ease, filter 160ms ease;
+    /* The painted canvas already contains its own shadow. Avoiding a CSS
+       filter keeps Safari from re-rasterizing the full canvas every frame. */
+    transition: opacity 160ms ease;
 }
 
 #nuoji-pet-root.is-disabled {
@@ -39,7 +40,6 @@
 #nuoji-pet-root.is-pressed,
 #nuoji-pet-root.is-dragging {
     cursor: grabbing;
-    filter: drop-shadow(0 13px 14px rgba(17, 25, 34, 0.26));
 }
 
 body:has(#nuoji-pet-root.is-hover) {
@@ -86,8 +86,6 @@ body:has(#nuoji-pet-root.is-dragging) {
     transform: translate(-50%, -118%) scale(0.88);
     transform-origin: 25% 100%;
     transition: opacity 150ms ease, transform 170ms cubic-bezier(0.2, 0.75, 0.25, 1.2);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
 }
 
 .nuoji-speech::after {

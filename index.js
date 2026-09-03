@@ -45,6 +45,10 @@ let hoverFrame;
 let bootTimer;
 let settingsLayerFrame;
 let settingsLayerTimer;
+let generationWatchdog;
+let chatActivityFrame;
+let chatObserver;
+let observedChatLength = 0;
 let currentPriority = 0;
 let priorityUntil = 0;
 let isGenerating = false;
@@ -319,7 +323,9 @@ function settingsPanelIsVisible() {
 }
 
 function syncSettingsPreviewLayer() {
-    ui?.root?.classList.toggle('is-settings-preview', settingsPanelIsVisible());
+    const isPreviewing = settingsPanelIsVisible();
+    ui?.root?.classList.toggle('is-settings-preview', isPreviewing);
+    renderer?.setSettingsPreviewMode(isPreviewing);
 }
 
 function scheduleSettingsPreviewLayer() {
@@ -740,52 +746,125 @@ function listen(eventName, handler) {
     onEventSource(context.eventSource, eventType, handler);
 }
 
-function bindSillyTavernEvents() {
-    listen('MESSAGE_SENT', () => {
-        transitionTo(PET_STATES.LISTENING, {
-            duration: 1200,
-            bubble: '嗯嗯，我在听',
-            priority: 25,
-            force: true,
-        });
-    });
+function clearGenerationWatchdog() {
+    window.clearTimeout(generationWatchdog);
+    generationWatchdog = undefined;
+}
 
-    listen('GENERATION_STARTED', () => {
-        isGenerating = true;
-        transitionTo(PET_STATES.THINKING, {
-            bubble: '让我想想…',
-            priority: 20,
+function beginThinking() {
+    const wasAlreadyThinking = isGenerating && renderer?.state === PET_STATES.THINKING;
+    isGenerating = true;
+    clearGenerationWatchdog();
+    generationWatchdog = window.setTimeout(() => {
+        if (!isGenerating) {
+            return;
+        }
+
+        isGenerating = false;
+        transitionTo(PET_STATES.CONFUSED, {
+            duration: 1700,
+            bubble: '唔，回信走丢了吗？',
+            priority: 30,
             force: true,
         });
+    }, 180000);
+
+    transitionTo(PET_STATES.THINKING, {
+        bubble: wasAlreadyThinking ? '' : '让我想想…',
+        priority: 25,
+        force: true,
     });
+}
+
+function finishThinking(bubble = '回信来啦！') {
+    clearGenerationWatchdog();
+    isGenerating = false;
+    transitionTo(PET_STATES.HAPPY, {
+        duration: 2100,
+        bubble,
+        priority: 35,
+        force: true,
+    });
+}
+
+function chatLog() {
+    return Array.isArray(context?.chat) ? context.chat : [];
+}
+
+function resetObservedChatLength() {
+    observedChatLength = chatLog().length;
+}
+
+function inspectChatActivity() {
+    chatActivityFrame = undefined;
+    const chat = chatLog();
+
+    if (chat.length < observedChatLength) {
+        observedChatLength = chat.length;
+        return;
+    }
+
+    if (chat.length === observedChatLength) {
+        return;
+    }
+
+    const newEntries = chat.slice(observedChatLength);
+    observedChatLength = chat.length;
+
+    // This is a deliberate DOM-backed fallback for third-party input flows
+    // that render messages but skip one of SillyTavern's generation events.
+    for (const entry of newEntries) {
+        if (entry?.is_user === true) {
+            beginThinking();
+        } else if (entry?.is_user === false && isGenerating) {
+            finishThinking();
+        }
+    }
+}
+
+function scheduleChatActivityInspection() {
+    window.cancelAnimationFrame(chatActivityFrame);
+    chatActivityFrame = window.requestAnimationFrame(inspectChatActivity);
+}
+
+function bindChatActivityFallback() {
+    resetObservedChatLength();
+    const chatElement = document.getElementById('chat');
+    if (!chatElement || typeof MutationObserver !== 'function') {
+        return;
+    }
+
+    chatObserver = new MutationObserver(scheduleChatActivityInspection);
+    chatObserver.observe(chatElement, { childList: true });
+    cleanups.push(() => chatObserver?.disconnect());
+}
+
+function bindSillyTavernEvents() {
+    // MESSAGE_SENT is the earliest normal send signal. USER_MESSAGE_RENDERED
+    // covers input helpers that insert a message through the UI, while
+    // GENERATION_AFTER_COMMANDS catches generation immediately after commands.
+    listen('MESSAGE_SENT', beginThinking);
+    listen('USER_MESSAGE_RENDERED', beginThinking);
+    listen('GENERATION_AFTER_COMMANDS', beginThinking);
+
+    listen('GENERATION_STARTED', beginThinking);
 
     listen('STREAM_TOKEN_RECEIVED', () => {
         renderer?.pulse();
     });
 
     listen('MESSAGE_RECEIVED', () => {
-        isGenerating = false;
-        transitionTo(PET_STATES.HAPPY, {
-            duration: 2100,
-            bubble: '回信来啦！',
-            priority: 35,
-            force: true,
-        });
+        finishThinking();
     });
 
     listen('CHARACTER_MESSAGE_RENDERED', () => {
-        if (renderer?.state === PET_STATES.THINKING) {
-            isGenerating = false;
-            transitionTo(PET_STATES.HAPPY, {
-                duration: 1800,
-                bubble: '好耶！',
-                priority: 35,
-                force: true,
-            });
+        if (isGenerating || renderer?.state === PET_STATES.THINKING) {
+            finishThinking('好耶！');
         }
     });
 
     listen('GENERATION_STOPPED', () => {
+        clearGenerationWatchdog();
         isGenerating = false;
         transitionTo(PET_STATES.CONFUSED, {
             duration: 1900,
@@ -796,6 +875,7 @@ function bindSillyTavernEvents() {
     });
 
     listen('GENERATION_ENDED', () => {
+        clearGenerationWatchdog();
         isGenerating = false;
         if (renderer?.state === PET_STATES.THINKING) {
             transitionTo(PET_STATES.CONFUSED, {
@@ -808,7 +888,9 @@ function bindSillyTavernEvents() {
     });
 
     listen('CHAT_CHANGED', () => {
+        clearGenerationWatchdog();
         isGenerating = false;
+        resetObservedChatLength();
         transitionTo(PET_STATES.WAVE, {
             duration: 1700,
             bubble: '我也跟过来啦！',
@@ -864,6 +946,8 @@ export function destroy() {
     window.cancelAnimationFrame(hoverFrame);
     window.cancelAnimationFrame(settingsLayerFrame);
     window.clearTimeout(settingsLayerTimer);
+    clearGenerationWatchdog();
+    window.cancelAnimationFrame(chatActivityFrame);
     renderer?.destroy();
     ui?.root?.remove();
     document.getElementById('nuoji-settings')?.remove();
@@ -884,6 +968,10 @@ export function destroy() {
     bootTimer = undefined;
     settingsLayerFrame = undefined;
     settingsLayerTimer = undefined;
+    generationWatchdog = undefined;
+    chatActivityFrame = undefined;
+    chatObserver = undefined;
+    observedChatLength = 0;
     currentPriority = 0;
     priorityUntil = 0;
     isGenerating = false;
@@ -923,6 +1011,7 @@ async function initialize() {
         applyStoredPosition();
         await createSettingsUi();
         bindSillyTavernEvents();
+        bindChatActivityFallback();
         bindViewportEvents();
         bindCustomReactionEvent();
 
