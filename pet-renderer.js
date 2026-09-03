@@ -14,12 +14,16 @@ const DESIGN_SIZE = 500;
 // that size while avoiding a 1000 x 1000 redraw on high-DPR iPhones.
 const MAX_PIXEL_RATIO = 1.5;
 const SKIN_URL = new URL('./assets/nuoji-base-v1.png', import.meta.url).href;
-const BODY_LAYER_URL = new URL('./assets/nuoji-body-v1.png', import.meta.url).href;
+const BODY_LAYER_URL = new URL('./assets/nuoji-body-v2.png', import.meta.url).href;
 const TAIL_LAYER_URL = new URL('./assets/nuoji-tail-v1.png', import.meta.url).href;
 const UNDERPAINT_LAYER_URL = new URL('./assets/nuoji-underpaint-v1.png', import.meta.url).href;
+const LEFT_EAR_LAYER_URL = new URL('./assets/nuoji-ear-left-v1.png', import.meta.url).href;
+const RIGHT_EAR_LAYER_URL = new URL('./assets/nuoji-ear-right-v1.png', import.meta.url).href;
 const CLOSED_EYES_URL = new URL('./assets/nuoji-closed-eyes-v2.png', import.meta.url).href;
 const CLOSED_EYES_SOURCE = Object.freeze({ x: 305, y: 290, width: 305, height: 190 });
 const TAIL_PIVOT = Object.freeze({ x: 690, y: 760 });
+const LEFT_EAR_PIVOT = Object.freeze({ x: 270, y: 360 });
+const RIGHT_EAR_PIVOT = Object.freeze({ x: 530, y: 335 });
 
 function ellipse(ctx, x, y, radiusX, radiusY, fillStyle) {
     ctx.beginPath();
@@ -83,7 +87,7 @@ export class NuojiRenderer {
         this.skinImage = null;
         this.skinReady = false;
         this.skinFailed = false;
-        this.layerImages = { body: null, tail: null, underpaint: null };
+        this.layerImages = { body: null, tail: null, underpaint: null, leftEar: null, rightEar: null };
         this.layersReady = false;
         this.layersFailed = false;
         this.closedEyesImage = null;
@@ -101,6 +105,8 @@ export class NuojiRenderer {
             body: BODY_LAYER_URL,
             tail: TAIL_LAYER_URL,
             underpaint: UNDERPAINT_LAYER_URL,
+            leftEar: LEFT_EAR_LAYER_URL,
+            rightEar: RIGHT_EAR_LAYER_URL,
         };
         let remaining = Object.keys(sources).length;
         let failed = false;
@@ -113,7 +119,7 @@ export class NuojiRenderer {
             this.layersReady = !failed && Object.values(this.layerImages).every(Boolean);
             this.layersFailed = failed;
             if (failed) {
-                console.warn('[Nuoji Pet] Tail layers failed to load; keeping the still painted skin.');
+                console.warn('[Nuoji Pet] Animated skin layers failed to load; keeping the still painted skin.');
                 this.loadSkin();
             }
             this.draw(performance.now());
@@ -456,26 +462,105 @@ export class NuojiRenderer {
         }
     }
 
+    earAngles(seconds, still) {
+        switch (this.state) {
+            case PET_STATES.LISTENING: {
+                const twitch = still ? 0 : Math.sin(seconds * 3.2) * 0.006;
+                return { left: 0.035 + twitch, right: -0.035 - twitch };
+            }
+            case PET_STATES.THINKING: {
+                const twitch = still ? 0 : Math.sin(seconds * 3) * 0.009;
+                return { left: twitch, right: -twitch };
+            }
+            case PET_STATES.HAPPY: {
+                const twitch = still ? 0 : Math.sin(seconds * 6.4) * 0.022;
+                return { left: twitch, right: -twitch };
+            }
+            case PET_STATES.CONFUSED:
+                return {
+                    left: -0.06 + (still ? 0 : Math.sin(seconds * 1.5) * 0.006),
+                    right: 0.008,
+                };
+            case PET_STATES.PETTING: {
+                const relax = still ? 0 : Math.sin(seconds * 2) * 0.005;
+                return { left: -0.018 + relax, right: 0.018 - relax };
+            }
+            case PET_STATES.SLEEPING:
+                return { left: -0.028, right: 0.028 };
+            case PET_STATES.WAVE: {
+                const twitch = still ? 0 : Math.sin(seconds * 5.2) * 0.018;
+                return { left: twitch, right: -twitch };
+            }
+            case PET_STATES.IDLE:
+            default:
+                return still
+                    ? { left: 0, right: 0 }
+                    : {
+                        left: Math.sin(seconds * 1.15) * 0.004,
+                        right: Math.sin(seconds * 1.3 + 1.1) * 0.004,
+                    };
+        }
+    }
+
+    drawRotatedLayer(ctx, image, pivot, angle, sourceLeft, sourceTop, sourceScale, drawWidth, drawHeight) {
+        const pivotX = sourceLeft + pivot.x * sourceScale;
+        const pivotY = sourceTop + pivot.y * sourceScale;
+        ctx.save();
+        ctx.translate(pivotX, pivotY);
+        ctx.rotate(angle);
+        ctx.translate(-pivotX, -pivotY);
+        ctx.drawImage(image, sourceLeft, sourceTop, drawWidth, drawHeight);
+        ctx.restore();
+    }
+
     drawLayeredSkin(ctx, seconds, still, naturalWidth, drawWidth, drawHeight) {
         const sourceScale = drawWidth / naturalWidth;
         const sourceLeft = -drawWidth / 2;
         const sourceTop = -drawHeight;
-        const pivotX = sourceLeft + TAIL_PIVOT.x * sourceScale;
-        const pivotY = sourceTop + TAIL_PIVOT.y * sourceScale;
 
         // The underpaint is never visible at rest. It only fills the slim patch
         // behind the tail when the original painted tail swings away.
         ctx.drawImage(this.layerImages.underpaint, sourceLeft, sourceTop, drawWidth, drawHeight);
 
-        ctx.save();
-        ctx.translate(pivotX, pivotY);
-        ctx.rotate(this.tailAngle(seconds, still));
-        ctx.translate(-pivotX, -pivotY);
-        ctx.drawImage(this.layerImages.tail, sourceLeft, sourceTop, drawWidth, drawHeight);
-        ctx.restore();
+        this.drawRotatedLayer(
+            ctx,
+            this.layerImages.tail,
+            TAIL_PIVOT,
+            this.tailAngle(seconds, still),
+            sourceLeft,
+            sourceTop,
+            sourceScale,
+            drawWidth,
+            drawHeight,
+        );
 
-        // Body and face stay pixel-identical to Nuoji's original portrait.
+        // The hidden crown underpaint is baked into the body layer. It only
+        // peeks through the tiny gaps exposed by the independently moving ears.
         ctx.drawImage(this.layerImages.body, sourceLeft, sourceTop, drawWidth, drawHeight);
+
+        const ears = this.earAngles(seconds, still);
+        this.drawRotatedLayer(
+            ctx,
+            this.layerImages.leftEar,
+            LEFT_EAR_PIVOT,
+            ears.left,
+            sourceLeft,
+            sourceTop,
+            sourceScale,
+            drawWidth,
+            drawHeight,
+        );
+        this.drawRotatedLayer(
+            ctx,
+            this.layerImages.rightEar,
+            RIGHT_EAR_PIVOT,
+            ears.right,
+            sourceLeft,
+            sourceTop,
+            sourceScale,
+            drawWidth,
+            drawHeight,
+        );
     }
 
     blinkAmount(now) {
