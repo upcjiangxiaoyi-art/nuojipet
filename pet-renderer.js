@@ -29,10 +29,9 @@ const WALK_FORM_SWITCH_ALPHA = 0.12;
 const WALK_LAYER_URLS = Object.freeze({
     body: new URL('./assets/nuoji-walk-body-v2.png', import.meta.url).href,
     frontNear: new URL('./assets/nuoji-walk-leg-front-near-v4.png', import.meta.url).href,
-    frontFar: new URL('./assets/nuoji-walk-leg-front-far-v2.png', import.meta.url).href,
+    frontFar: new URL('./assets/nuoji-walk-leg-front-far-v3.png', import.meta.url).href,
     hindNear: new URL('./assets/nuoji-walk-leg-hind-near-v4.png', import.meta.url).href,
-    hindFar: new URL('./assets/nuoji-walk-leg-hind-far-v2.png', import.meta.url).href,
-    bellyOverlay: new URL('./assets/nuoji-walk-belly-overlay-v1.png', import.meta.url).href,
+    hindFar: new URL('./assets/nuoji-walk-leg-hind-far-v3.png', import.meta.url).href,
 });
 const TAU = Math.PI * 2;
 // A relaxed feline walk is a four-beat lateral-sequence gait. Each paw spends
@@ -58,8 +57,6 @@ const WALK_LEGS = Object.freeze([
         forwardAngle: 0.23, backwardAngle: 0.24, lift: 12, tuck: 0.042,
     },
 ]);
-const WALK_FAR_LEGS = Object.freeze(WALK_LEGS.slice(0, 2));
-const WALK_NEAR_LEGS = Object.freeze(WALK_LEGS.slice(2));
 const CLOSED_EYES_SOURCE = Object.freeze({ x: 305, y: 290, width: 305, height: 190 });
 const TAIL_PIVOT = Object.freeze({ x: 690, y: 760 });
 const LEFT_EAR_PIVOT = Object.freeze({ x: 270, y: 360 });
@@ -217,7 +214,6 @@ export class NuojiRenderer {
         this.walkLayers = {
             body: null,
             frontNear: null, frontFar: null, hindNear: null, hindFar: null,
-            bellyOverlay: null,
         };
         this.walkLayersReady = false;
         this.walkReady = false;
@@ -677,7 +673,6 @@ export class NuojiRenderer {
         this.walkLayers = {
             body: null,
             frontNear: null, frontFar: null, hindNear: null, hindFar: null,
-            bellyOverlay: null,
         };
         this.walkLayersReady = false;
     }
@@ -954,28 +949,20 @@ export class NuojiRenderer {
                 (1 - squash * 0.7) * (1 - formFold * 0.14),
             );
             if (this.walkLayersReady) {
-                // All four complete legs enter beneath the body. Near legs are
-                // drawn for depth, then a narrow veil copied only from the
-                // leg-free belly plate goes over their shoulder/hip openings.
-                // It hides rotating cut edges without ever becoming a fixed
-                // fifth leg root.
-                for (const leg of WALK_FAR_LEGS) {
+                // All four complete legs go down first (far pair, then near
+                // pair for depth), and the whole leg-free body is painted last.
+                // The body plate is the mask: every shoulder/hip joint, cut
+                // edge and joint cap stays hidden under the real chest and
+                // belly fur, while the lower legs and paws that extend past
+                // the silhouette stay visible. Nothing is drawn over the body,
+                // so nothing can bulge out of it as the legs rotate.
+                for (const leg of WALK_LEGS) {
                     drawWalkingLeg(
                         ctx, this.walkLayers[leg.name], leg, phase, still,
                         walkWidth, walkHeight, walkFitScale,
                     );
                 }
                 ctx.drawImage(this.walkLayers.body, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
-                for (const leg of WALK_NEAR_LEGS) {
-                    drawWalkingLeg(
-                        ctx, this.walkLayers[leg.name], leg, phase, still,
-                        walkWidth, walkHeight, walkFitScale,
-                    );
-                }
-                ctx.drawImage(
-                    this.walkLayers.bellyOverlay,
-                    -walkWidth / 2, -walkHeight, walkWidth, walkHeight,
-                );
             } else {
                 ctx.drawImage(gaitFrame, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
             }
