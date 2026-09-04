@@ -78,6 +78,12 @@ const CLOSED_EYES_SOURCE = Object.freeze({ x: 305, y: 290, width: 305, height: 1
 const TAIL_PIVOT = Object.freeze({ x: 690, y: 760 });
 // Root of the tail plume on the walking plate, where it leaves the rump.
 const WALK_TAIL_PIVOT = Object.freeze({ x: 890, y: 610 });
+// The head/body/tail plate is drawn a touch larger than the leg plates and
+// settled downward, so the chest and belly fur sit over more of each leg
+// root. Anchored on the upper back so the paws and ground line stay put.
+const WALK_BODY_SCALE = 1.06;
+const WALK_BODY_ANCHOR = Object.freeze({ x: 700, y: 430 });
+const WALK_BODY_DROP = 8;
 const LEFT_EAR_PIVOT = Object.freeze({ x: 270, y: 360 });
 const RIGHT_EAR_PIVOT = Object.freeze({ x: 530, y: 335 });
 
@@ -1010,10 +1016,20 @@ export class NuojiRenderer {
                 const tailSway = still
                     ? 0
                     : this.tailAngle(seconds, still) * 1.4 + Math.sin(phase) * 0.035;
+                const bodyAnchorX = -walkWidth / 2 + WALK_BODY_ANCHOR.x * walkFitScale;
+                const bodyAnchorY = -walkHeight + WALK_BODY_ANCHOR.y * walkFitScale;
+                const applyBodyPlateTransform = () => {
+                    ctx.translate(bodyAnchorX, bodyAnchorY + WALK_BODY_DROP * walkFitScale);
+                    ctx.scale(WALK_BODY_SCALE, WALK_BODY_SCALE);
+                    ctx.translate(-bodyAnchorX, -bodyAnchorY);
+                };
+                ctx.save();
+                applyBodyPlateTransform();
                 this.drawRotatedLayer(
                     ctx, this.walkLayers.tail, WALK_TAIL_PIVOT, tailSway,
                     -walkWidth / 2, -walkHeight, walkFitScale, walkWidth, walkHeight,
                 );
+                ctx.restore();
                 // All four complete legs go down first (far pair, then near
                 // pair for depth), and the whole leg-free body is painted last.
                 // The body plate is the mask: every shoulder/hip joint, cut
@@ -1027,7 +1043,10 @@ export class NuojiRenderer {
                         walkWidth, walkHeight, walkFitScale,
                     );
                 }
+                ctx.save();
+                applyBodyPlateTransform();
                 ctx.drawImage(this.walkLayers.body, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
+                ctx.restore();
             } else {
                 ctx.drawImage(gaitFrame, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
             }

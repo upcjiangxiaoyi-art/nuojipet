@@ -29,6 +29,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     opacity: 100,
     reducedMotion: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false,
     showBubble: true,
+    autoWalk: true,
     position: {
         x: 0.82,
         y: 0.68,
@@ -378,6 +379,7 @@ function bindSettingsControls() {
     const opacity = document.getElementById('nuoji-opacity');
     const reducedMotion = document.getElementById('nuoji-reduced-motion');
     const showBubble = document.getElementById('nuoji-show-bubble');
+    const autoWalk = document.getElementById('nuoji-auto-walk');
     const resetPosition = document.getElementById('nuoji-reset-position');
     const previewWalk = document.getElementById('nuoji-preview-walk');
 
@@ -422,6 +424,19 @@ function bindSettingsControls() {
                 hideBubble();
             } else if (isGenerating) {
                 showBubble('让我想想…', 0);
+            }
+            saveSettings();
+        });
+    }
+
+    if (autoWalk) {
+        on(autoWalk, 'change', (event) => {
+            settings.autoWalk = event.currentTarget.checked;
+            if (settings.autoWalk) {
+                scheduleAutoWalk();
+            } else {
+                clearAutoWalkTimer();
+                cancelAutoWalk();
             }
             saveSettings();
         });
@@ -472,6 +487,7 @@ function syncSettingsControls() {
     const opacityValue = document.getElementById('nuoji-opacity-value');
     const reducedMotion = document.getElementById('nuoji-reduced-motion');
     const showBubble = document.getElementById('nuoji-show-bubble');
+    const autoWalk = document.getElementById('nuoji-auto-walk');
 
     if (enabled) enabled.checked = Boolean(settings.enabled);
     if (scale) scale.value = String(settings.scale);
@@ -480,6 +496,7 @@ function syncSettingsControls() {
     if (opacityValue) opacityValue.textContent = `${settings.opacity}%`;
     if (reducedMotion) reducedMotion.checked = Boolean(settings.reducedMotion);
     if (showBubble) showBubble.checked = Boolean(settings.showBubble);
+    if (autoWalk) autoWalk.checked = Boolean(settings.autoWalk);
 }
 
 function previewBubbleFor(state) {
@@ -909,6 +926,7 @@ function scheduleAutoWalk() {
         || drag.active
         || roamRun
         || !settings?.enabled
+        || !settings.autoWalk
         || settings.reducedMotion
     ) {
         return;
