@@ -32,6 +32,7 @@ const WALK_LAYER_URLS = Object.freeze({
     frontFar: new URL('./assets/nuoji-walk-leg-front-far-v2.png', import.meta.url).href,
     hindNear: new URL('./assets/nuoji-walk-leg-hind-near-v4.png', import.meta.url).href,
     hindFar: new URL('./assets/nuoji-walk-leg-hind-far-v2.png', import.meta.url).href,
+    bellyOverlay: new URL('./assets/nuoji-walk-belly-overlay-v1.png', import.meta.url).href,
 });
 const TAU = Math.PI * 2;
 // A relaxed feline walk is a four-beat lateral-sequence gait. Each paw spends
@@ -98,14 +99,23 @@ export function getWalkLegPose(phaseRadians, legName) {
     }
 
     const swingProgress = (cycle - WALK_STANCE_PORTION) / (1 - WALK_STANCE_PORTION);
-    const travel = smootherStep(swingProgress);
-    const arc = Math.sin(swingProgress * Math.PI) ** 1.35;
+    // Finish the return stroke a little early, then leave one short visual
+    // beat with the paw planted forward. At 24 fps this is the missing
+    // “touchdown frame”: the paw descends, meets the ground, and only then
+    // begins its weight-bearing rearward stroke instead of snapping at the
+    // cycle boundary.
+    const landingStart = leg.name === 'frontNear' ? 0.84 : 0.90;
+    const travel = smootherStep(Math.min(1, swingProgress / landingStart));
+    const arcProgress = Math.min(1, swingProgress / landingStart);
+    const arc = Math.sin(arcProgress * Math.PI) ** 1.35;
+    const landing = swingProgress >= landingStart;
     return {
         angle: -leg.backwardAngle + (leg.forwardAngle + leg.backwardAngle) * travel,
-        lift: arc * leg.lift,
-        tuck: arc * leg.tuck,
+        lift: landing ? 0 : arc * leg.lift,
+        tuck: landing ? 0 : arc * leg.tuck,
         cycle,
-        swinging: true,
+        landing,
+        swinging: !landing,
     };
 }
 
@@ -207,6 +217,7 @@ export class NuojiRenderer {
         this.walkLayers = {
             body: null,
             frontNear: null, frontFar: null, hindNear: null, hindFar: null,
+            bellyOverlay: null,
         };
         this.walkLayersReady = false;
         this.walkReady = false;
@@ -666,6 +677,7 @@ export class NuojiRenderer {
         this.walkLayers = {
             body: null,
             frontNear: null, frontFar: null, hindNear: null, hindFar: null,
+            bellyOverlay: null,
         };
         this.walkLayersReady = false;
     }
@@ -942,10 +954,11 @@ export class NuojiRenderer {
                 (1 - squash * 0.7) * (1 - formFold * 0.14),
             );
             if (this.walkLayersReady) {
-                // Far legs disappear beneath the complete belly plate. The
-                // softly feathered near legs then sit on top. Do not add a
-                // fixed socket/underpaint strip here: as a paw swings away,
-                // that stationary strip reads as an extra detached leg root.
+                // All four complete legs enter beneath the body. Near legs are
+                // drawn for depth, then a narrow veil copied only from the
+                // leg-free belly plate goes over their shoulder/hip openings.
+                // It hides rotating cut edges without ever becoming a fixed
+                // fifth leg root.
                 for (const leg of WALK_FAR_LEGS) {
                     drawWalkingLeg(
                         ctx, this.walkLayers[leg.name], leg, phase, still,
@@ -959,6 +972,10 @@ export class NuojiRenderer {
                         walkWidth, walkHeight, walkFitScale,
                     );
                 }
+                ctx.drawImage(
+                    this.walkLayers.bellyOverlay,
+                    -walkWidth / 2, -walkHeight, walkWidth, walkHeight,
+                );
             } else {
                 ctx.drawImage(gaitFrame, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
             }
