@@ -27,7 +27,8 @@ const WALK_GREEN_URL = new URL('./assets/nuoji-walk-green-v1.png', import.meta.u
 const WALK_FORM_TRANSITION_MS = 190;
 const WALK_FORM_SWITCH_ALPHA = 0.12;
 const WALK_LAYER_URLS = Object.freeze({
-    body: new URL('./assets/nuoji-walk-body-v2.png', import.meta.url).href,
+    body: new URL('./assets/nuoji-walk-body-v3.png', import.meta.url).href,
+    tail: new URL('./assets/nuoji-walk-tail-v1.png', import.meta.url).href,
     frontNear: new URL('./assets/nuoji-walk-leg-front-near-v5.png', import.meta.url).href,
     frontNearPaw: new URL('./assets/nuoji-walk-paw-front-near-v1.png', import.meta.url).href,
     frontFar: new URL('./assets/nuoji-walk-leg-front-far-v3.png', import.meta.url).href,
@@ -75,6 +76,8 @@ const WALK_LEGS = Object.freeze([
 ]);
 const CLOSED_EYES_SOURCE = Object.freeze({ x: 305, y: 290, width: 305, height: 190 });
 const TAIL_PIVOT = Object.freeze({ x: 690, y: 760 });
+// Root of the tail plume on the walking plate, where it leaves the rump.
+const WALK_TAIL_PIVOT = Object.freeze({ x: 890, y: 610 });
 const LEFT_EAR_PIVOT = Object.freeze({ x: 270, y: 360 });
 const RIGHT_EAR_PIVOT = Object.freeze({ x: 530, y: 335 });
 
@@ -263,7 +266,7 @@ export class NuojiRenderer {
         this.ballLoading = false;
         this.walkImage = null;
         this.walkLayers = {
-            body: null,
+            body: null, tail: null,
             frontNear: null, frontFar: null, hindNear: null, hindFar: null,
             frontNearPaw: null,
         };
@@ -723,7 +726,7 @@ export class NuojiRenderer {
         this.ballImage = null;
         this.walkImage = null;
         this.walkLayers = {
-            body: null,
+            body: null, tail: null,
             frontNear: null, frontFar: null, hindNear: null, hindFar: null,
             frontNearPaw: null,
         };
@@ -1002,6 +1005,15 @@ export class NuojiRenderer {
                 (1 - squash * 0.7) * (1 - formFold * 0.14),
             );
             if (this.walkLayersReady) {
+                // The tail plume swings behind everything: the mood sway from
+                // the sitting pose plus a slow roll tied to the stride.
+                const tailSway = still
+                    ? 0
+                    : this.tailAngle(seconds, still) * 1.4 + Math.sin(phase) * 0.035;
+                this.drawRotatedLayer(
+                    ctx, this.walkLayers.tail, WALK_TAIL_PIVOT, tailSway,
+                    -walkWidth / 2, -walkHeight, walkFitScale, walkWidth, walkHeight,
+                );
                 // All four complete legs go down first (far pair, then near
                 // pair for depth), and the whole leg-free body is painted last.
                 // The body plate is the mask: every shoulder/hip joint, cut
