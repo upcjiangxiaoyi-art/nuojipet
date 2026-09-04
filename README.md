@@ -2,7 +2,7 @@
 
 一只住在 SillyTavern 页面里的银白猫狐。糯叽会听你说话、陪模型思考、迎接新回复，也可以被拖到屏幕上任意位置——但我们不把她喂成可露丽那么胖。
 
-这是 GPT × Ripple 一起搓、经 Fable51 工程审校的会眨眼、会甩尾、会明显动耳、会闭眼趴睡、会缩成咕噜噜毛团，也会用四条独立小腿自然迈步来陪你的 `v0.9.11`。
+这是 GPT × Ripple 一起搓、经 Fable51 工程审校的会眨眼、会甩尾、会明显动耳、会闭眼趴睡、会缩成咕噜噜毛团，也会用四条独立小腿自然迈步来陪你的 `v0.10.0`。
 
 ![糯叽的八种首版状态](docs/state-preview.png)
 
@@ -109,16 +109,16 @@ window.NuojiPet.react('sleeping', '困嘟嘟…', 3000);
 - `assets/nuoji-ear-left-v1.png` / `nuoji-ear-right-v1.png`：可独立旋转的原画左右耳层
 - `assets/nuoji-underpaint-v1.png`：只在尾巴摆开时露出的隐藏补毛层
 - `assets/nuoji-closed-eyes-v2.png`：去掉灰黑眼圈的闭眼眼周透明小皮肤
-- `assets/nuoji-lying-green-v1.png`：保留的趴姿绿幕源图，供换皮或重新抠图时参考；运行时不再加载
 - `assets/nuoji-lying-v2.png`：预先清净绿幕的趴姿，耳尖、耳后与颈毛不再留下荧光绿边
 - `assets/nuoji-lying-closed-eyes-v2.png`：只覆盖趴姿双眼的柔和闭眼层；遮罩收紧并二次去绿，不再碰到耳后的绿幕区域
 - `assets/nuoji-ball-green-v1.png`：尾巴环抱的团子生产母版，首次生成时一次性抠除纯色底并缓存
 - `assets/nuoji-walk-green-v1.png`：唯一侧身行走母版，也是分层意外失败时的静态降级素材
-- `assets/nuoji-walk-body-v2.png`：无腿的固定头身尾层，行走时最后绘制，整张胸腹毛就是四条腿根的遮罩；与四条腿统一重抠绿幕边缘，保证行走期间整只糯叽不抖也不泛绿
+- `assets/nuoji-walk-body-v3.png`：无腿、无尾的固定头身层，行走时最后绘制，整张胸腹毛就是四条腿根与尾根的遮罩；由 `tools/split_walk_tail.py` 从 v2 母版切出
+- `assets/nuoji-walk-tail-v1.png`：行走用的大尾巴层，以尾根为轴单独摆动，画在四条腿和身体之下
 - `assets/nuoji-walk-leg-front-far-v3.png` / `nuoji-walk-leg-hind-far-v3.png`：两条远侧腿；小腿与爪子来自母版并加宽 18%，上方是由 `tools/rebuild_far_legs.py` 从小腿毛发合成、朝肩/髋枢轴延伸的大腿柱，不再夹带近侧腿的毛片
 - `assets/nuoji-walk-leg-front-near-v5.png` / `nuoji-walk-leg-hind-near-v5.png`：两条近侧腿（加宽 8%），带随腿旋转的柔和关节帽；关节帽整个藏在身体之下，只负责在摆动时补住腿根。前近腿不含脚掌，由 `tools/split_front_paw.py` 生成
 - `assets/nuoji-walk-paw-front-near-v1.png`：近侧前爪的脚掌层，以手腕为轴单独旋转；承重时压平贴地，摆动时蜷起
-- `assets/nuoji-walk-belly-overlay-v1.png` / `nuoji-walk-underpaint-v2.png` / `nuoji-walk-leg-*-far-v2.png` / `nuoji-walk-leg-*-near-v4.png`：保留的旧实验层与旧腿层；运行时不再加载
+- `assets/nuoji-walk-body-v2.png` / `nuoji-walk-leg-*-far-v2.png` / `nuoji-walk-leg-*-near-v4.png`：三个重建脚本的输入源图，运行时不加载。更早的实验层已在 v0.10.0 删除，需要时可从 v0.9.11 的提交历史取回
 
 坐姿与行走姿态之间使用约 190 ms 的“先收后放”单通道转场：中点前只绘制旧姿态，中点后才绘制新姿态，因此不会出现两只完整轮廓交叉叠影。趴姿与团子仍保留原有的柔和混合。
 - `style.css`：悬浮层、手机适配和设置面板样式
