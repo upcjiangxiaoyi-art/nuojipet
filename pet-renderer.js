@@ -39,22 +39,32 @@ const TAU = Math.PI * 2;
 // part that lifts. The slightly uneven 0.27 / 0.23 spacing keeps the diagonal
 // couplets soft instead of snapping two legs together like a trot.
 const WALK_STANCE_PORTION = 0.72;
+// `paw` is the resting paw-pad contact point relative to the pivot and
+// `ground` the plate row that paw must stand on. A rigid leg swinging about
+// its shoulder/hip lifts the paw on an arc, and the near front leg is painted
+// mid-step with the paw already in the air, so every stance frame extends the
+// leg (`stretchMax`, a straightening illusion) and then lowers whatever is left
+// until the pad meets the ground line. Swing lifts start and end on that line.
 const WALK_LEGS = Object.freeze([
     {
         name: 'frontFar', pivot: { x: 450, y: 720 }, touchdown: 0.77,
         forwardAngle: 0.20, backwardAngle: 0.17, lift: 10.5, tuck: 0.038,
+        paw: { x: -31, y: 260 }, ground: 980, stretchMax: 0.05,
     },
     {
         name: 'hindFar', pivot: { x: 850, y: 710 }, touchdown: 0.50,
         forwardAngle: 0.19, backwardAngle: 0.21, lift: 10, tuck: 0.034,
+        paw: { x: 62, y: 273 }, ground: 983, stretchMax: 0.05,
     },
     {
         name: 'frontNear', pivot: { x: 370, y: 700 }, touchdown: 0.27,
-        forwardAngle: 0.24, backwardAngle: 0.19, lift: 13, tuck: 0.048,
+        forwardAngle: 0.17, backwardAngle: 0.19, lift: 13, tuck: 0.048,
+        paw: { x: -103, y: 238 }, ground: 973, stretchMax: 0.12,
     },
     {
         name: 'hindNear', pivot: { x: 700, y: 710 }, touchdown: 0,
         forwardAngle: 0.23, backwardAngle: 0.24, lift: 12, tuck: 0.042,
+        paw: { x: -70, y: 263 }, ground: 973, stretchMax: 0.05,
     },
 ]);
 const CLOSED_EYES_SOURCE = Object.freeze({ x: 305, y: 290, width: 305, height: 190 });
@@ -104,7 +114,10 @@ export function getWalkLegPose(phaseRadians, legName) {
     const landingStart = leg.name === 'frontNear' ? 0.84 : 0.90;
     const travel = smootherStep(Math.min(1, swingProgress / landingStart));
     const arcProgress = Math.min(1, swingProgress / landingStart);
-    const arc = Math.sin(arcProgress * Math.PI) ** 1.35;
+    // Peak the lift a little before mid-swing so the paw spends the back half
+    // of the stroke reaching forward and settling down, the way a cat places
+    // a paw, instead of dropping from its highest point straight to the ground.
+    const arc = Math.sin(arcProgress ** 0.85 * Math.PI) ** 1.35;
     const landing = swingProgress >= landingStart;
     return {
         angle: -leg.backwardAngle + (leg.forwardAngle + leg.backwardAngle) * travel,
@@ -116,19 +129,36 @@ export function getWalkLegPose(phaseRadians, legName) {
     };
 }
 
+/**
+ * Work out how far a posed leg must extend and then drop (in plate pixels)
+ * for its paw pad to rest exactly on the ground line. Exported for tests.
+ */
+export function getWalkGroundContact(leg, pose) {
+    const sin = Math.sin(pose.angle);
+    const cos = Math.cos(pose.angle);
+    const reach = leg.paw.y * (1 - pose.tuck);
+    const pawY = leg.pivot.y + leg.paw.x * sin + reach * cos;
+    const needed = Math.max(0, leg.ground - pawY);
+    const perStretch = Math.max(1, reach * cos);
+    const stretch = Math.min(leg.stretchMax, needed / perStretch);
+    return { stretch, drop: needed - stretch * perStretch };
+}
+
 function drawWalkingLeg(ctx, image, leg, phase, still, walkWidth, walkHeight, walkFitScale) {
     const pose = still
         ? { angle: 0, lift: 0, tuck: 0 }
         : getWalkLegPose(phase, leg.name);
     const pivotX = -walkWidth / 2 + leg.pivot.x * walkFitScale;
     const pivotY = -walkHeight + leg.pivot.y * walkFitScale;
+    const contact = getWalkGroundContact(leg, pose);
     ctx.save();
-    ctx.translate(0, -pose.lift);
+    ctx.translate(0, contact.drop * walkFitScale - pose.lift);
     ctx.translate(pivotX, pivotY);
     ctx.rotate(pose.angle);
-    // A tiny shortening at mid-swing suggests elbow/hock flex without adding
-    // extra images or exposing the hidden shoulder/hip seam.
-    ctx.scale(1, 1 - pose.tuck);
+    // A tiny shortening at mid-swing suggests elbow/hock flex, and the stance
+    // extension straightens the leg toward the ground, without adding extra
+    // images or exposing the hidden shoulder/hip seam.
+    ctx.scale(1, (1 - pose.tuck) * (1 + contact.stretch));
     ctx.translate(-pivotX, -pivotY);
     ctx.drawImage(image, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
     ctx.restore();
