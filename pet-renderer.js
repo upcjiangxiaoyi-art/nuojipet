@@ -24,6 +24,8 @@ const LYING_GREEN_URL = new URL('./assets/nuoji-lying-green-v1.png', import.meta
 const LYING_CLOSED_EYES_URL = new URL('./assets/nuoji-lying-closed-eyes-v1.png', import.meta.url).href;
 const BALL_GREEN_URL = new URL('./assets/nuoji-ball-green-v1.png', import.meta.url).href;
 const WALK_GREEN_URL = new URL('./assets/nuoji-walk-green-v1.png', import.meta.url).href;
+const WALK_FORM_TRANSITION_MS = 190;
+const WALK_FORM_SWITCH_ALPHA = 0.12;
 const WALK_LAYER_URLS = Object.freeze({
     body: new URL('./assets/nuoji-walk-body-v1.png', import.meta.url).href,
     underpaint: new URL('./assets/nuoji-walk-underpaint-v1.png', import.meta.url).href,
@@ -218,6 +220,11 @@ export class NuojiRenderer {
         this.formTransitionTarget = { ...this.formWeights };
         this.formTransitionStartedAt = 0;
         this.formTransitionDuration = 460;
+        this.formTransitionMode = 'blend';
+        this.formTransitionFromName = 'sitting';
+        this.formTransitionTargetName = 'sitting';
+        this.formTransitionStartOpacity = 1;
+        this.formTransitionFold = 0;
         this.boundLoop = this.loop.bind(this);
         this.boundVisibilityChange = this.handleVisibilityChange.bind(this);
 
@@ -530,18 +537,51 @@ export class NuojiRenderer {
             this.formWeights = target;
             this.formTransitionFrom = { ...target };
             this.formTransitionTarget = { ...target };
+            this.formTransitionMode = 'blend';
+            this.formTransitionFold = 0;
             return;
         }
 
+        const currentForm = Object.entries(current).sort((a, b) => b[1] - a[1])[0][0];
+        const serialWalkSwitch = !immediate
+            && currentForm !== availableForm
+            && (currentForm === 'walking' || availableForm === 'walking');
         this.formTransitionFrom = { ...current };
         this.formTransitionTarget = { ...target };
         this.formTransitionStartedAt = now;
-        this.formTransitionDuration = immediate ? 1 : 460;
+        this.formTransitionMode = serialWalkSwitch ? 'serial-walk' : 'blend';
+        this.formTransitionFromName = currentForm;
+        this.formTransitionTargetName = availableForm;
+        this.formTransitionStartOpacity = Math.max(
+            WALK_FORM_SWITCH_ALPHA,
+            Number(current[currentForm]) || 0,
+        );
+        this.formTransitionDuration = immediate
+            ? 1
+            : serialWalkSwitch ? WALK_FORM_TRANSITION_MS : 460;
         this.draw(now);
     }
 
     currentFormWeights(now) {
         const progress = Math.min(1, Math.max(0, (now - this.formTransitionStartedAt) / this.formTransitionDuration));
+        if (this.formTransitionMode === 'serial-walk' && progress < 1) {
+            const weights = { sitting: 0, lying: 0, ball: 0, walking: 0 };
+            this.formTransitionFold = Math.sin(progress * Math.PI);
+            if (progress < 0.5) {
+                const outgoingProgress = progress / 0.5;
+                const eased = outgoingProgress * outgoingProgress * (3 - 2 * outgoingProgress);
+                weights[this.formTransitionFromName] = this.formTransitionStartOpacity
+                    + (WALK_FORM_SWITCH_ALPHA - this.formTransitionStartOpacity) * eased;
+            } else {
+                const incomingProgress = (progress - 0.5) / 0.5;
+                const eased = incomingProgress * incomingProgress * (3 - 2 * incomingProgress);
+                weights[this.formTransitionTargetName] = WALK_FORM_SWITCH_ALPHA
+                    + (1 - WALK_FORM_SWITCH_ALPHA) * eased;
+            }
+            this.formWeights = weights;
+            return weights;
+        }
+
         const eased = progress * progress * (3 - 2 * progress);
         const weights = {};
         for (const form of ['sitting', 'lying', 'ball', 'walking']) {
@@ -552,6 +592,8 @@ export class NuojiRenderer {
         if (progress >= 1) {
             this.formTransitionFrom = { ...this.formTransitionTarget };
             this.formWeights = { ...this.formTransitionTarget };
+            this.formTransitionMode = 'blend';
+            this.formTransitionFold = 0;
         }
         return this.formWeights;
     }
@@ -728,6 +770,7 @@ export class NuojiRenderer {
         const lyingBlend = this.lyingReady ? formWeights.lying : 0;
         const ballBlend = this.ballReady ? formWeights.ball : 0;
         const walkingBlend = this.walkReady ? formWeights.walking : 0;
+        const formFold = this.formTransitionFold;
 
         let offsetX = 0;
         let offsetY = 0;
@@ -814,7 +857,10 @@ export class NuojiRenderer {
             ctx.globalAlpha = alpha * sittingBlend;
             ctx.translate(250 + offsetX, 468 + offsetY + (1 - sittingBlend) * 18);
             ctx.rotate(rotation * sittingBlend);
-            ctx.scale(scaleX, scaleY * (0.92 + sittingBlend * 0.08));
+            ctx.scale(
+                scaleX * (1 - formFold * 0.035),
+                scaleY * (0.92 + sittingBlend * 0.08) * (1 - formFold * 0.14),
+            );
             if (this.layersReady) {
                 this.drawLayeredSkin(ctx, seconds, still, naturalWidth, drawWidth, drawHeight);
             } else {
@@ -890,7 +936,10 @@ export class NuojiRenderer {
             ctx.rotate(lean * walkingBlend);
             // The production plate faces left. Mirror it only while travelling right.
             ctx.scale(-this.walkDirection, 1);
-            ctx.scale(1 + squash, 1 - squash * 0.7);
+            ctx.scale(
+                (1 + squash) * (1 - formFold * 0.035),
+                (1 - squash * 0.7) * (1 - formFold * 0.14),
+            );
             if (this.walkLayersReady) {
                 // Far legs disappear beneath the belly; the small original-fur
                 // underpaint closes their moving sockets. Near legs sit above
