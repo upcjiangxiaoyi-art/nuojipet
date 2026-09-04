@@ -2,7 +2,7 @@
 
 一只住在 SillyTavern 页面里的银白猫狐。糯叽会听你说话、陪模型思考、迎接新回复，也可以被拖到屏幕上任意位置——但我们不把她喂成可露丽那么胖。
 
-这是 GPT × Ripple 一起搓、经 Fable51 工程审校的会眨眼、会甩尾、会明显动耳、会闭眼趴睡、会缩成咕噜噜毛团，也会用四条独立小腿自然迈步来陪你的 `v0.10.1`。
+这是 GPT × Ripple 一起搓、经 Fable51 工程审校的会眨眼、会甩尾、会明显动耳、会闭眼趴睡、会缩成咕噜噜毛团，也会用四条独立小腿自然迈步来陪你的 `v0.10.2`。
 
 ![糯叽的八种首版状态](docs/state-preview.png)
 
@@ -118,7 +118,7 @@ window.NuojiPet.react('sleeping', '困嘟嘟…', 3000);
 - `assets/nuoji-walk-leg-front-far-v3.png` / `nuoji-walk-leg-hind-far-v3.png`：两条远侧腿；小腿与爪子来自母版并加宽 18%，上方是由 `tools/rebuild_far_legs.py` 从小腿毛发合成、朝肩/髋枢轴延伸的大腿柱，不再夹带近侧腿的毛片
 - `assets/nuoji-walk-leg-front-near-v5.png` / `nuoji-walk-leg-hind-near-v5.png`：两条近侧腿（加宽 8%），带随腿旋转的柔和关节帽；关节帽整个藏在身体之下，只负责在摆动时补住腿根。前近腿不含脚掌，由 `tools/split_front_paw.py` 生成
 - `assets/nuoji-walk-paw-front-near-v1.png`：近侧前爪的脚掌层，以手腕为轴单独旋转；承重时压平贴地，摆动时蜷起
-- `assets/nuoji-walk-body-v2.png` / `nuoji-walk-leg-*-far-v2.png` / `nuoji-walk-leg-*-near-v4.png`：三个重建脚本的输入源图，运行时不加载。更早的实验层已在 v0.10.0 删除，需要时可从 v0.9.11 的提交历史取回
+- `assets/nuoji-walk-body-v2.png` / `nuoji-walk-leg-*-far-v2.png` / `nuoji-walk-leg-*-near-v2.png` / `nuoji-walk-leg-*-near-v4.png`：三个重建脚本的输入源图（v2 近腿只用作真实腿形参考），运行时不加载。更早的实验层已在 v0.10.0 删除，需要时可从 v0.9.11 的提交历史取回
 
 坐姿与行走姿态之间使用约 190 ms 的“先收后放”单通道转场：中点前只绘制旧姿态，中点后才绘制新姿态，因此不会出现两只完整轮廓交叉叠影。趴姿与团子仍保留原有的柔和混合。
 - `style.css`：悬浮层、手机适配和设置面板样式
