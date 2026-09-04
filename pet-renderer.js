@@ -28,9 +28,9 @@ const WALK_FORM_TRANSITION_MS = 190;
 const WALK_FORM_SWITCH_ALPHA = 0.12;
 const WALK_LAYER_URLS = Object.freeze({
     body: new URL('./assets/nuoji-walk-body-v2.png', import.meta.url).href,
-    frontNear: new URL('./assets/nuoji-walk-leg-front-near-v3.png', import.meta.url).href,
+    frontNear: new URL('./assets/nuoji-walk-leg-front-near-v4.png', import.meta.url).href,
     frontFar: new URL('./assets/nuoji-walk-leg-front-far-v2.png', import.meta.url).href,
-    hindNear: new URL('./assets/nuoji-walk-leg-hind-near-v3.png', import.meta.url).href,
+    hindNear: new URL('./assets/nuoji-walk-leg-hind-near-v4.png', import.meta.url).href,
     hindFar: new URL('./assets/nuoji-walk-leg-hind-far-v2.png', import.meta.url).href,
 });
 const TAU = Math.PI * 2;
