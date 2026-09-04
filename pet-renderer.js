@@ -20,8 +20,8 @@ const UNDERPAINT_LAYER_URL = new URL('./assets/nuoji-underpaint-v1.png', import.
 const LEFT_EAR_LAYER_URL = new URL('./assets/nuoji-ear-left-v1.png', import.meta.url).href;
 const RIGHT_EAR_LAYER_URL = new URL('./assets/nuoji-ear-right-v1.png', import.meta.url).href;
 const CLOSED_EYES_URL = new URL('./assets/nuoji-closed-eyes-v2.png', import.meta.url).href;
-const LYING_GREEN_URL = new URL('./assets/nuoji-lying-green-v1.png', import.meta.url).href;
-const LYING_CLOSED_EYES_URL = new URL('./assets/nuoji-lying-closed-eyes-v1.png', import.meta.url).href;
+const LYING_SKIN_URL = new URL('./assets/nuoji-lying-v2.png', import.meta.url).href;
+const LYING_CLOSED_EYES_URL = new URL('./assets/nuoji-lying-closed-eyes-v2.png', import.meta.url).href;
 const BALL_GREEN_URL = new URL('./assets/nuoji-ball-green-v1.png', import.meta.url).href;
 const WALK_GREEN_URL = new URL('./assets/nuoji-walk-green-v1.png', import.meta.url).href;
 const WALK_FORM_TRANSITION_MS = 190;
@@ -318,7 +318,7 @@ export class NuojiRenderer {
         const image = new Image();
         image.decoding = 'async';
         image.addEventListener('load', () => {
-            this.lyingImage = this.removeGreenScreen(image);
+            this.lyingImage = image;
             this.lyingReady = Boolean(this.lyingImage);
             this.lyingLoading = false;
             if (this.requestedForm === 'lying') {
@@ -332,7 +332,7 @@ export class NuojiRenderer {
             this.lyingLoading = false;
             console.warn('[Nuoji Pet] Lying pose failed to load; keeping the sitting pose.');
         }, { once: true });
-        image.src = LYING_GREEN_URL;
+        image.src = LYING_SKIN_URL;
     }
 
     loadLyingClosedEyes() {
@@ -463,16 +463,18 @@ export class NuojiRenderer {
             const red = data[index];
             const green = data[index + 1];
             const blue = data[index + 2];
-            const dominance = green - Math.max(red, blue);
-            if (dominance > 0) {
-                data[index + 1] = Math.max(red, blue);
-            }
-            if (green < 70 || dominance < 8) {
+            const screenScore = Math.min(
+                green - blue - 8,
+                green - (red - 18),
+            );
+            if (screenScore <= 0) {
                 continue;
             }
 
-            const alpha = Math.max(0, Math.min(255, 255 - (dominance - 8) * 1.3));
-            data[index + 3] = Math.min(data[index + 3], alpha);
+            data[index + 1] = Math.min(green, Math.max(blue, red - 18));
+            const keyProgress = Math.min(1, screenScore / 18);
+            const eased = keyProgress * keyProgress * (3 - 2 * keyProgress);
+            data[index + 3] = Math.min(data[index + 3], Math.round(255 * (1 - eased)));
         }
         context.putImageData(pixels, 0, 0);
         return canvas;
@@ -942,8 +944,10 @@ export class NuojiRenderer {
             );
             if (this.walkLayersReady) {
                 // Far legs disappear beneath the belly; the small original-fur
-                // underpaint closes their moving sockets. Near legs sit above
-                // it, then the immutable body hides every upper-leg seam.
+                // underpaint closes their moving sockets. The immutable body
+                // covers those rear sockets first, then the softly feathered
+                // near legs sit on top so neither front paw nor rear thigh is
+                // cut in half by the body silhouette.
                 for (const leg of WALK_FAR_LEGS) {
                     drawWalkingLeg(
                         ctx, this.walkLayers[leg.name], leg, phase, still,
@@ -951,15 +955,13 @@ export class NuojiRenderer {
                     );
                 }
                 ctx.drawImage(this.walkLayers.underpaint, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
+                ctx.drawImage(this.walkLayers.body, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
                 for (const leg of WALK_NEAR_LEGS) {
                     drawWalkingLeg(
                         ctx, this.walkLayers[leg.name], leg, phase, still,
                         walkWidth, walkHeight, walkFitScale,
                     );
                 }
-                // One immutable head/body/tail plate sits above all four leg
-                // roots, so the face and silhouette never jump between frames.
-                ctx.drawImage(this.walkLayers.body, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
             } else {
                 ctx.drawImage(gaitFrame, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
             }
