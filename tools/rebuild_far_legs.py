@@ -1,14 +1,37 @@
 """Rebuild the far-leg layers: keep the real shin/paw, replace the copied
 parallelogram above it with a synthesized thigh column that runs up under
 the body plate toward the shoulder/hip pivot."""
+import os
 from PIL import Image
 import numpy as np
 
-A = 'assets/'  # run from the repository root
+A = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'assets') + os.sep
 
-def rebuild(src, dst, y_trusted, y_top, pivot_x, top_scale, curve=0.6, band=56, alpha_min=12):
+def widen_rows(im, y_from, factor, alpha_min=8):
+    """Scale every row's opaque span about its own centre by `factor`."""
+    h, w, _ = im.shape
+    xs = np.arange(w)
+    out = im.copy()
+    for y in range(y_from, h):
+        cols = np.where(im[y, :, 3] > alpha_min)[0]
+        if len(cols) == 0:
+            continue
+        c = (cols.min() + cols.max()) / 2
+        sx = c + (xs - c) / factor
+        sx0 = np.clip(np.floor(sx).astype(int), 0, w - 2)
+        f = np.clip(sx - sx0, 0, 1)[:, None]
+        valid = (sx >= 0) & (sx <= w - 1)
+        row = im[y, sx0] * (1 - f) + im[y, sx0 + 1] * f
+        row[~valid] = 0
+        out[y] = row
+    return out
+
+
+def rebuild(src, dst, y_trusted, y_top, pivot_x, top_scale, curve=0.6, band=56, alpha_min=12, widen=1.0):
     im = np.array(Image.open(A + src).convert('RGBA')).astype(np.float32)
     h, w, _ = im.shape
+    if widen != 1.0:
+        im = widen_rows(im, y_trusted - 40, widen)
     out = im.copy()
     out[:y_trusted] = 0  # drop the whole copied slab above the trusted shin rows
 
@@ -49,7 +72,8 @@ def rebuild(src, dst, y_trusted, y_top, pivot_x, top_scale, curve=0.6, band=56, 
     Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)).save(A + dst)
     print(dst, 'shin centre', c0, 'half width', hw0)
 
-rebuild('nuoji-walk-leg-front-far-v2.png', 'nuoji-walk-leg-front-far-v3.png',
-        y_trusted=842, y_top=650, pivot_x=450, top_scale=1.7)
-rebuild('nuoji-walk-leg-hind-far-v2.png', 'nuoji-walk-leg-hind-far-v3.png',
-        y_trusted=846, y_top=640, pivot_x=850, top_scale=2.6)
+if __name__ == '__main__':
+    rebuild('nuoji-walk-leg-front-far-v2.png', 'nuoji-walk-leg-front-far-v3.png',
+            y_trusted=842, y_top=650, pivot_x=450, top_scale=1.8, widen=1.18)
+    rebuild('nuoji-walk-leg-hind-far-v2.png', 'nuoji-walk-leg-hind-far-v3.png',
+            y_trusted=846, y_top=640, pivot_x=850, top_scale=2.7, widen=1.18)
