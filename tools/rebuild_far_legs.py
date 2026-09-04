@@ -76,4 +76,4 @@ if __name__ == '__main__':
     rebuild('nuoji-walk-leg-front-far-v2.png', 'nuoji-walk-leg-front-far-v3.png',
             y_trusted=842, y_top=650, pivot_x=450, top_scale=1.8, widen=1.18)
     rebuild('nuoji-walk-leg-hind-far-v2.png', 'nuoji-walk-leg-hind-far-v3.png',
-            y_trusted=846, y_top=640, pivot_x=850, top_scale=2.7, widen=1.18)
+            y_trusted=846, y_top=640, pivot_x=800, top_scale=2.7, widen=1.18)
