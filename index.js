@@ -4,11 +4,18 @@ const MODULE_NAME = 'nuoji_pet';
 const DEFAULT_EXTENSION_NAME = 'third-party/nuoji-pet';
 const POSITION_MARGIN = 10;
 const DRAG_THRESHOLD = 7;
-const HIT_ALPHA = 40;
-const HIT_RADIUS_TOUCH = 14;
+// Fur tips are soft; only clearly painted pixels count as Nuoji, and the
+// touch forgiveness ring is kept small so buttons beside her stay tappable.
+const HIT_ALPHA = 72;
+const HIT_RADIUS_TOUCH = 8;
 const HIT_RADIUS_MOUSE = 3;
-const CLICK_GUARD_DURATION = 900;
-const CLICK_GUARD_RADIUS = 36;
+// Only swallow the browser's own synthetic click that follows a tap on
+// Nuoji; it lands within a few hundred ms at the same spot.
+const CLICK_GUARD_DURATION = 450;
+const CLICK_GUARD_RADIUS = 24;
+// A press that never receives pointerup/pointercancel (app switch, system
+// gesture) must not leave the page's touches blocked forever.
+const STALE_PRESS_TIMEOUT = 15000;
 const DOUBLE_TAP_WINDOW = 320;
 const DOUBLE_TAP_RADIUS = 42;
 const LONG_PRESS_DURATION = 600;
@@ -72,6 +79,7 @@ let isGenerating = false;
 let publicApi;
 let clickGuard;
 let longPressTimer;
+let stalePressTimer;
 let pendingTap;
 let typingIdleTimer;
 let typingAttentionActive = false;
@@ -202,6 +210,14 @@ function createPetUi() {
     on(document, 'pointermove', handlePointerMove, { capture: true, passive: false });
     on(document, 'pointerup', handlePointerUp, { capture: true });
     on(document, 'pointercancel', handlePointerCancel, { capture: true });
+    on(document, 'touchend', handleTouchEndBackstop, { capture: true, passive: true });
+    on(document, 'touchcancel', handleTouchEndBackstop, { capture: true, passive: true });
+    on(window, 'blur', abandonPointerInteraction);
+    on(document, 'visibilitychange', () => {
+        if (document.hidden) {
+            abandonPointerInteraction();
+        }
+    });
     on(document, 'contextmenu', handleContextMenuGuard, { capture: true });
     on(document, 'pointermove', handleHoverHint, { passive: true });
     on(document, 'input', handleTypingInput, { capture: true, passive: true });
@@ -258,6 +274,30 @@ function handleTouchStartGuard(event) {
 
     event.stopImmediatePropagation();
     event.preventDefault();
+}
+
+function handleTouchEndBackstop(event) {
+    // Pointer events normally end the press. If the browser dropped that
+    // pointerup, the last finger leaving the screen still releases Nuoji.
+    if (drag.active && event.touches.length === 0) {
+        abandonPointerInteraction();
+    }
+}
+
+function abandonPointerInteraction() {
+    if (!drag.active) {
+        return;
+    }
+
+    const wasDragged = drag.moved;
+    const wasLongPress = drag.longPress;
+    finishPointerInteraction();
+    if (wasDragged) {
+        rememberCurrentPosition();
+    }
+    if (wasDragged || wasLongPress) {
+        returnToAmbient();
+    }
 }
 
 function handleHoverHint(event) {
@@ -649,6 +689,7 @@ function handlePointerDown(event) {
     drag.longPress = false;
     ui.root.classList.add('is-pressed');
     scheduleLongPress();
+    armStalePressTimer();
     armClickGuard(event);
     event.preventDefault();
 }
@@ -674,6 +715,7 @@ function handlePointerMove(event) {
     if (drag.moved) {
         setPixelPosition(drag.startLeft + deltaX, drag.startTop + deltaY);
     }
+    armStalePressTimer();
 
     event.stopImmediatePropagation();
     event.preventDefault();
@@ -727,7 +769,14 @@ function handlePointerCancel(event) {
     }
 }
 
+function armStalePressTimer() {
+    window.clearTimeout(stalePressTimer);
+    stalePressTimer = window.setTimeout(abandonPointerInteraction, STALE_PRESS_TIMEOUT);
+}
+
 function finishPointerInteraction() {
+    window.clearTimeout(stalePressTimer);
+    stalePressTimer = undefined;
     clearLongPressTimer();
     ui.root.classList.remove('is-pressed', 'is-dragging');
     drag.active = false;
@@ -1437,6 +1486,8 @@ export function destroy() {
     clearThinkingCompanionTimers();
     clearTypingAttention();
     clearLongPressTimer();
+    window.clearTimeout(stalePressTimer);
+    stalePressTimer = undefined;
     clearPendingTap();
     clearPoseTimer();
     clearAutoWalkTimer();
