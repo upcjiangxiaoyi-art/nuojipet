@@ -28,7 +28,6 @@ const WALK_FORM_TRANSITION_MS = 190;
 const WALK_FORM_SWITCH_ALPHA = 0.12;
 const WALK_LAYER_URLS = Object.freeze({
     body: new URL('./assets/nuoji-walk-body-v2.png', import.meta.url).href,
-    underpaint: new URL('./assets/nuoji-walk-underpaint-v2.png', import.meta.url).href,
     frontNear: new URL('./assets/nuoji-walk-leg-front-near-v3.png', import.meta.url).href,
     frontFar: new URL('./assets/nuoji-walk-leg-front-far-v2.png', import.meta.url).href,
     hindNear: new URL('./assets/nuoji-walk-leg-hind-near-v3.png', import.meta.url).href,
@@ -206,7 +205,7 @@ export class NuojiRenderer {
         this.ballLoading = false;
         this.walkImage = null;
         this.walkLayers = {
-            body: null, underpaint: null,
+            body: null,
             frontNear: null, frontFar: null, hindNear: null, hindFar: null,
         };
         this.walkLayersReady = false;
@@ -665,7 +664,7 @@ export class NuojiRenderer {
         this.ballImage = null;
         this.walkImage = null;
         this.walkLayers = {
-            body: null, underpaint: null,
+            body: null,
             frontNear: null, frontFar: null, hindNear: null, hindFar: null,
         };
         this.walkLayersReady = false;
@@ -943,18 +942,16 @@ export class NuojiRenderer {
                 (1 - squash * 0.7) * (1 - formFold * 0.14),
             );
             if (this.walkLayersReady) {
-                // Far legs disappear beneath the belly; the small original-fur
-                // underpaint closes their moving sockets. The immutable body
-                // covers those rear sockets first, then the softly feathered
-                // near legs sit on top so neither front paw nor rear thigh is
-                // cut in half by the body silhouette.
+                // Far legs disappear beneath the complete belly plate. The
+                // softly feathered near legs then sit on top. Do not add a
+                // fixed socket/underpaint strip here: as a paw swings away,
+                // that stationary strip reads as an extra detached leg root.
                 for (const leg of WALK_FAR_LEGS) {
                     drawWalkingLeg(
                         ctx, this.walkLayers[leg.name], leg, phase, still,
                         walkWidth, walkHeight, walkFitScale,
                     );
                 }
-                ctx.drawImage(this.walkLayers.underpaint, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
                 ctx.drawImage(this.walkLayers.body, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
                 for (const leg of WALK_NEAR_LEGS) {
                     drawWalkingLeg(
