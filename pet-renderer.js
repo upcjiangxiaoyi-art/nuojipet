@@ -28,9 +28,10 @@ const WALK_FORM_TRANSITION_MS = 190;
 const WALK_FORM_SWITCH_ALPHA = 0.12;
 const WALK_LAYER_URLS = Object.freeze({
     body: new URL('./assets/nuoji-walk-body-v2.png', import.meta.url).href,
-    frontNear: new URL('./assets/nuoji-walk-leg-front-near-v4.png', import.meta.url).href,
+    frontNear: new URL('./assets/nuoji-walk-leg-front-near-v5.png', import.meta.url).href,
+    frontNearPaw: new URL('./assets/nuoji-walk-paw-front-near-v1.png', import.meta.url).href,
     frontFar: new URL('./assets/nuoji-walk-leg-front-far-v3.png', import.meta.url).href,
-    hindNear: new URL('./assets/nuoji-walk-leg-hind-near-v4.png', import.meta.url).href,
+    hindNear: new URL('./assets/nuoji-walk-leg-hind-near-v5.png', import.meta.url).href,
     hindFar: new URL('./assets/nuoji-walk-leg-hind-far-v3.png', import.meta.url).href,
 });
 const TAU = Math.PI * 2;
@@ -58,8 +59,13 @@ const WALK_LEGS = Object.freeze([
     },
     {
         name: 'frontNear', pivot: { x: 370, y: 700 }, touchdown: 0.27,
-        forwardAngle: 0.17, backwardAngle: 0.19, lift: 13, tuck: 0.048,
-        paw: { x: -103, y: 238 }, ground: 973, stretchMax: 0.12,
+        forwardAngle: 0.15, backwardAngle: 0.19, lift: 13, tuck: 0.048,
+        // The plate paints this paw hanging mid-step. It lives on its own
+        // layer hinged at the wrist: laid flat (`flatAngle`) whenever it bears
+        // weight, curled back to the painted pose at the top of the swing.
+        // `paw` is the contact point with the paw flat, `pawCurled` when hung.
+        paw: { x: -107, y: 219 }, pawCurled: { x: -103, y: 238 }, ground: 973, stretchMax: 0.05,
+        pawLayer: 'frontNearPaw', wrist: { x: 298, y: 880 }, flatAngle: 0.55,
     },
     {
         name: 'hindNear', pivot: { x: 700, y: 710 }, touchdown: 0,
@@ -100,6 +106,7 @@ export function getWalkLegPose(phaseRadians, legName) {
             angle: leg.forwardAngle + (-leg.backwardAngle - leg.forwardAngle) * progress,
             lift: 0,
             tuck: 0,
+            curl: 0,
             cycle,
             swinging: false,
         };
@@ -123,6 +130,7 @@ export function getWalkLegPose(phaseRadians, legName) {
         angle: -leg.backwardAngle + (leg.forwardAngle + leg.backwardAngle) * travel,
         lift: landing ? 0 : arc * leg.lift,
         tuck: landing ? 0 : arc * leg.tuck,
+        curl: landing ? 0 : arc,
         cycle,
         landing,
         swinging: !landing,
@@ -136,17 +144,21 @@ export function getWalkLegPose(phaseRadians, legName) {
 export function getWalkGroundContact(leg, pose) {
     const sin = Math.sin(pose.angle);
     const cos = Math.cos(pose.angle);
-    const reach = leg.paw.y * (1 - pose.tuck);
-    const pawY = leg.pivot.y + leg.paw.x * sin + reach * cos;
+    const curl = leg.pawCurled ? pose.curl || 0 : 0;
+    const pawX = leg.paw.x + (curl ? (leg.pawCurled.x - leg.paw.x) * curl : 0);
+    const pawYRest = leg.paw.y + (curl ? (leg.pawCurled.y - leg.paw.y) * curl : 0);
+    const reach = pawYRest * (1 - pose.tuck);
+    const pawY = leg.pivot.y + pawX * sin + reach * cos;
     const needed = Math.max(0, leg.ground - pawY);
     const perStretch = Math.max(1, reach * cos);
     const stretch = Math.min(leg.stretchMax, needed / perStretch);
     return { stretch, drop: needed - stretch * perStretch };
 }
 
-function drawWalkingLeg(ctx, image, leg, phase, still, walkWidth, walkHeight, walkFitScale) {
+function drawWalkingLeg(ctx, layers, leg, phase, still, walkWidth, walkHeight, walkFitScale) {
+    const image = layers[leg.name];
     const pose = still
-        ? { angle: 0, lift: 0, tuck: 0 }
+        ? { angle: 0, lift: 0, tuck: 0, curl: 0 }
         : getWalkLegPose(phase, leg.name);
     const pivotX = -walkWidth / 2 + leg.pivot.x * walkFitScale;
     const pivotY = -walkHeight + leg.pivot.y * walkFitScale;
@@ -161,6 +173,15 @@ function drawWalkingLeg(ctx, image, leg, phase, still, walkWidth, walkHeight, wa
     ctx.scale(1, (1 - pose.tuck) * (1 + contact.stretch));
     ctx.translate(-pivotX, -pivotY);
     ctx.drawImage(image, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
+    if (leg.pawLayer && layers[leg.pawLayer]) {
+        // Hinge the paw at the wrist: flat on the ground, curled in the air.
+        const wristX = -walkWidth / 2 + leg.wrist.x * walkFitScale;
+        const wristY = -walkHeight + leg.wrist.y * walkFitScale;
+        ctx.translate(wristX, wristY);
+        ctx.rotate(leg.flatAngle * (1 - (pose.curl || 0)));
+        ctx.translate(-wristX, -wristY);
+        ctx.drawImage(layers[leg.pawLayer], -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
+    }
     ctx.restore();
 }
 
@@ -244,6 +265,7 @@ export class NuojiRenderer {
         this.walkLayers = {
             body: null,
             frontNear: null, frontFar: null, hindNear: null, hindFar: null,
+            frontNearPaw: null,
         };
         this.walkLayersReady = false;
         this.walkReady = false;
@@ -703,6 +725,7 @@ export class NuojiRenderer {
         this.walkLayers = {
             body: null,
             frontNear: null, frontFar: null, hindNear: null, hindFar: null,
+            frontNearPaw: null,
         };
         this.walkLayersReady = false;
     }
@@ -988,7 +1011,7 @@ export class NuojiRenderer {
                 // so nothing can bulge out of it as the legs rotate.
                 for (const leg of WALK_LEGS) {
                     drawWalkingLeg(
-                        ctx, this.walkLayers[leg.name], leg, phase, still,
+                        ctx, this.walkLayers, leg, phase, still,
                         walkWidth, walkHeight, walkFitScale,
                     );
                 }
