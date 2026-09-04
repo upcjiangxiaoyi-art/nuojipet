@@ -6,7 +6,7 @@ import numpy as np
 
 A = 'assets/'  # run from the repository root
 
-def rebuild(src, dst, y_trusted, y_top, pivot_x, top_scale, band=56, alpha_min=12):
+def rebuild(src, dst, y_trusted, y_top, pivot_x, top_scale, curve=0.6, band=56, alpha_min=12):
     im = np.array(Image.open(A + src).convert('RGBA')).astype(np.float32)
     h, w, _ = im.shape
     out = im.copy()
@@ -24,7 +24,9 @@ def rebuild(src, dst, y_trusted, y_top, pivot_x, top_scale, band=56, alpha_min=1
     for y in range(y_top, y_trusted):
         t = (y_trusted - y) / (y_trusted - y_top)      # 0 at the shin, 1 at the top
         centre = c0 + (pivot_x - c0) * t
-        hw = hw0 * (1 + (top_scale - 1) * t)
+        # curve < 1 makes the thigh fill out soon after the shin instead of
+        # only near the hidden top.
+        hw = hw0 * (1 + (top_scale - 1) * t ** curve)
         # Mirror-tiled source row from the trusted band so the seam is continuous.
         k = (y_trusted - y) % (2 * band)
         sy = y_trusted + (k if k < band else 2 * band - k)
@@ -48,6 +50,6 @@ def rebuild(src, dst, y_trusted, y_top, pivot_x, top_scale, band=56, alpha_min=1
     print(dst, 'shin centre', c0, 'half width', hw0)
 
 rebuild('nuoji-walk-leg-front-far-v2.png', 'nuoji-walk-leg-front-far-v3.png',
-        y_trusted=842, y_top=650, pivot_x=450, top_scale=1.4)
+        y_trusted=842, y_top=650, pivot_x=450, top_scale=1.7)
 rebuild('nuoji-walk-leg-hind-far-v2.png', 'nuoji-walk-leg-hind-far-v3.png',
-        y_trusted=846, y_top=640, pivot_x=850, top_scale=2.0)
+        y_trusted=846, y_top=640, pivot_x=850, top_scale=2.6)
