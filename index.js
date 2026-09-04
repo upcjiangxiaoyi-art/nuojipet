@@ -226,6 +226,33 @@ function createPetUi() {
     return { root, canvas, bubble, hint };
 }
 
+/**
+ * Nuoji's root is pointer-events: none, so the browser never reports her as
+ * the element under a point. Switch that on for one synchronous hit test to
+ * learn whether anything (a drawer, a popup, a settings panel) is stacked
+ * above her there. If it is, the tap belongs to that element, not to her.
+ */
+function nuojiIsTopmostAt(clientX, clientY) {
+    if (typeof document.elementFromPoint !== 'function') {
+        return true;
+    }
+
+    const root = ui.root;
+    const previous = root.style.pointerEvents;
+    root.style.pointerEvents = 'auto';
+    let topmost;
+    try {
+        topmost = document.elementFromPoint(clientX, clientY);
+    } catch {
+        topmost = null;
+    } finally {
+        root.style.pointerEvents = previous;
+    }
+
+    // Outside the viewport (or hit-testing unavailable): fall back to pixels.
+    return !topmost || topmost === root || root.contains(topmost);
+}
+
 function hitsNuoji(clientX, clientY, pointerType = 'mouse') {
     if (!ui?.root || !renderer?.ctx || !settings?.enabled) {
         return false;
@@ -239,6 +266,10 @@ function hitsNuoji(clientX, clientY, pointerType = 'mouse') {
         || clientY > rect.bottom
         || rect.width <= 0
     ) {
+        return false;
+    }
+
+    if (!nuojiIsTopmostAt(clientX, clientY)) {
         return false;
     }
 
