@@ -109,7 +109,6 @@ window.NuojiPet.react('sleeping', '困嘟嘟…', 3000);
 - `assets/nuoji-ear-left-v1.png` / `nuoji-ear-right-v1.png`：可独立旋转的原画左右耳层
 - `assets/nuoji-underpaint-v1.png`：只在尾巴摆开时露出的隐藏补毛层
 - `assets/nuoji-closed-eyes-v2.png`：去掉灰黑眼圈的闭眼眼周透明小皮肤
-- `assets/nuoji-lying-green-v1.png`：保留的趴姿绿幕源图，供换皮或重新抠图时参考；运行时不再加载
 - `assets/nuoji-lying-v2.png`：预先清净绿幕的趴姿，耳尖、耳后与颈毛不再留下荧光绿边
 - `assets/nuoji-lying-closed-eyes-v2.png`：只覆盖趴姿双眼的柔和闭眼层；遮罩收紧并二次去绿，不再碰到耳后的绿幕区域
 - `assets/nuoji-ball-green-v1.png`：尾巴环抱的团子生产母版，首次生成时一次性抠除纯色底并缓存
