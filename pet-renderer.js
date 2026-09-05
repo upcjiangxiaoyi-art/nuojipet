@@ -5,6 +5,7 @@ export const PET_STATES = Object.freeze({
     HAPPY: 'happy',
     CONFUSED: 'confused',
     PETTING: 'petting',
+    NUZZLING: 'nuzzling',
     SLEEPING: 'sleeping',
     WAVE: 'wave',
 });
@@ -251,6 +252,42 @@ function drawWalkingLeg(ctx, layers, leg, phase, still, walkWidth, walkHeight, w
     }
     ctx.restore();
 }
+
+export const NUZZLE_DURATION_MS = 4200;
+
+/** Approach, two cheek rubs, then release. A one-shot gesture, never a loop. */
+export function getNuzzlePose(seconds, still = false) {
+    if (still) return { lean: -0.10, x: -12, y: 2, close: 1, affection: 0.65, rub: 0 };
+    const t = Math.max(0, Number(seconds) || 0);
+    const approach = smootherStep(t / 0.75) * (1 - smootherStep((t - 3) / 1.2));
+    const stroke = (start) => {
+        const phase = (t - start) / 0.85;
+        return phase > 0 && phase < 1 ? Math.sin(Math.PI * phase) ** 2 : 0;
+    };
+    const rub = stroke(0.9) + stroke(1.95);
+    return {
+        lean: -approach * 0.16 - rub * 0.075,
+        x: -approach * 20 - rub * 9,
+        y: approach * 4 - rub * 7,
+        close: smootherStep((t - 0.22) / 0.42) * (1 - smootherStep((t - 3.25) / 0.7)),
+        affection: approach,
+        rub,
+    };
+}
+
+/** Rigid face above the neck, soft torso below it, completely fixed paws. */
+export function getNuzzlePoint(x, y, pose) {
+    const weight = 1 - smootherStep((y - 225) / 205);
+    const px = x - 215;
+    const py = y - 255;
+    const cos = Math.cos(pose.lean);
+    const sin = Math.sin(pose.lean);
+    return {
+        x: x + weight * (px * (cos - 1) - py * sin + pose.x),
+        y: y + weight * (px * sin + py * (cos - 1) + pose.y),
+    };
+}
+
 
 function ellipse(ctx, x, y, radiusX, radiusY, fillStyle) {
     ctx.beginPath();
@@ -623,7 +660,7 @@ export class NuojiRenderer {
             return;
         }
 
-        if (this.state !== nextState) {
+        if (this.state !== nextState || nextState === PET_STATES.NUZZLING) {
             this.state = nextState;
             this.stateStartedAt = performance.now();
         }
@@ -939,6 +976,9 @@ export class NuojiRenderer {
                 offsetX = -3;
                 rotation = -0.045;
                 break;
+            case PET_STATES.NUZZLING:
+                // A separate head/torso skin pass supplies the motion.
+                break;
             case PET_STATES.PETTING:
                 offsetY = still ? 2 : 2 + Math.abs(quickWave) * 2;
                 scaleX = still ? 1.012 : 1.012 + Math.abs(quickWave) * 0.008;
@@ -980,10 +1020,12 @@ export class NuojiRenderer {
         const drawWidth = naturalWidth * fitScale;
         const drawHeight = naturalHeight * fitScale;
 
-        if (sittingBlend > 0.001) {
+        if (sittingBlend > 0.001 && this.state === PET_STATES.NUZZLING && this.layersReady) {
+            this.drawNuzzleSkin(ctx, now, naturalWidth, drawWidth, drawHeight, alpha * sittingBlend);
+        } else if (sittingBlend > 0.001) {
             ctx.save();
             ctx.globalAlpha = alpha * sittingBlend;
-            ctx.translate(250 + offsetX, 468 + offsetY + (1 - sittingBlend) * 18);
+            ctx.translate(250 + offsetX, 492 + offsetY + (1 - sittingBlend) * 18);
             ctx.rotate(rotation * sittingBlend);
             ctx.scale(
                 scaleX * (1 - formFold * 0.035),
@@ -1114,6 +1156,59 @@ export class NuojiRenderer {
         this.drawPaintedAccents(ctx, seconds, still);
     }
 
+    drawNuzzleSkin(ctx, now, naturalWidth, drawWidth, drawHeight, alpha) {
+        const seconds = (now - this.stateStartedAt) / 1000;
+        const still = this.reducedMotion;
+        const pose = getNuzzlePose(seconds, still);
+        const scale = drawWidth / naturalWidth;
+        const left = 250 - drawWidth / 2;
+        const top = 492 - drawHeight;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        // Existing PNG textures stay cached. The tail keeps its own root and
+        // never gets stretched with the neck; the small patch covers its base.
+        ctx.drawImage(this.layerImages.underpaint,left,top,drawWidth,drawHeight);
+        this.drawRotatedLayer(ctx,this.layerImages.tail,TAIL_PIVOT,
+            this.tailAngle(seconds,still),left,top,scale,drawWidth,drawHeight);
+
+        // One rigid head section, narrow flexible torso strips, fixed paws.
+        const rows = [top,225];
+        for (let y=233; y<430; y+=8) rows.push(y);
+        rows.push(430,492);
+        for (let i=0; i<rows.length-1; i++) {
+            const y=rows[i], height=rows[i+1]-y;
+            const p = getNuzzlePoint(0,y,pose);
+            const q = getNuzzlePoint(500,y,pose);
+            const middle = getNuzzlePoint(250,y,pose);
+            const next = getNuzzlePoint(250,y+height,pose);
+            const a = (q.x-p.x)/500;
+            const b = (q.y-p.y)/500;
+            const c = (next.x-middle.x)/height;
+            const d = (next.y-middle.y)/height;
+            ctx.save();
+            ctx.transform(a,b,c,d,middle.x-a*250-c*y,middle.y-b*250-d*y);
+            const h = Math.min(492-y,height+2.5);
+            ctx.drawImage(this.layerImages.body,0,(y-top)/scale,naturalWidth,h/scale,
+                left,y,drawWidth,h);
+            ctx.restore();
+        }
+        // Ear pivots and the closed-eye patch share the head's rigid transform.
+        // They cannot slip off the face or leave an unturned second pair behind.
+        ctx.save();
+        ctx.translate(215+pose.x,255+pose.y);
+        ctx.rotate(pose.lean);
+        ctx.translate(-215,-255);
+        const ears = this.earAngles(seconds,still);
+        this.drawRotatedLayer(ctx,this.layerImages.leftEar,LEFT_EAR_PIVOT,ears.left,
+            left,top,scale,drawWidth,drawHeight);
+        this.drawRotatedLayer(ctx,this.layerImages.rightEar,RIGHT_EAR_PIVOT,ears.right,
+            left,top,scale,drawWidth,drawHeight);
+        ctx.translate(250,492);
+        this.drawClosedEyesOverlay(ctx,now,naturalWidth,drawWidth,drawHeight);
+        ctx.restore();
+        ctx.restore();
+    }
+
     tailAngle(seconds, still) {
         if (still) {
             return 0;
@@ -1122,6 +1217,10 @@ export class NuojiRenderer {
         switch (this.state) {
             case PET_STATES.HAPPY:
                 return Math.sin(seconds * 5) * 0.11;
+            case PET_STATES.NUZZLING: {
+                const pose = getNuzzlePose(seconds, still);
+                return pose.affection * (0.02 + Math.sin(seconds * 2.4) * 0.065);
+            }
             case PET_STATES.PETTING:
                 return Math.sin(seconds * 2.25) * 0.09;
             case PET_STATES.WAVE:
@@ -1177,6 +1276,11 @@ export class NuojiRenderer {
                     left: -0.125 + (still ? 0 : Math.sin(seconds * 1.5) * 0.008),
                     right: 0.014,
                 };
+            case PET_STATES.NUZZLING: {
+                const pose = getNuzzlePose(seconds, still);
+                return {left: -0.06 * pose.affection - 0.02 * pose.rub,
+                    right: 0.045 * pose.affection + 0.015 * pose.rub};
+            }
             case PET_STATES.PETTING: {
                 const relax = still ? 0 : Math.sin(seconds * 2) * 0.01;
                 return { left: -0.065 + relax, right: 0.065 - relax };
@@ -1266,7 +1370,10 @@ export class NuojiRenderer {
     }
 
     blinkAmount(now) {
-        if ([PET_STATES.HAPPY, PET_STATES.PETTING, PET_STATES.SLEEPING].includes(this.state)) {
+        if (this.state === PET_STATES.NUZZLING) {
+            return getNuzzlePose((now - this.stateStartedAt) / 1000, this.reducedMotion).close;
+        }
+        if ([PET_STATES.HAPPY, PET_STATES.PETTING, PET_STATES.NUZZLING, PET_STATES.SLEEPING].includes(this.state)) {
             return 1;
         }
 
@@ -1359,6 +1466,15 @@ export class NuojiRenderer {
             ctx.font = '700 48px ui-rounded, system-ui, sans-serif';
             ctx.fillStyle = '#bd8741';
             ctx.fillText('?', 0, 0);
+            ctx.restore();
+        }
+
+        if (this.state === PET_STATES.NUZZLING) {
+            const pose = getNuzzlePose(seconds, still);
+            ctx.save();
+            ctx.globalAlpha = pose.affection * 0.88;
+            drawHeart(ctx, 74 - pose.rub * 3, 235 - pose.rub * 8, 19, '#edb0b7', 0.12);
+            drawHeart(ctx, 49, 210 - pose.rub * 5, 12, '#efd0a6', -0.12);
             ctx.restore();
         }
 
@@ -1588,7 +1704,7 @@ export class NuojiRenderer {
     }
 
     drawFace(ctx, seconds, still) {
-        const closed = [PET_STATES.HAPPY, PET_STATES.PETTING, PET_STATES.SLEEPING].includes(this.state);
+        const closed = [PET_STATES.HAPPY, PET_STATES.PETTING, PET_STATES.NUZZLING, PET_STATES.SLEEPING].includes(this.state);
         const blinkCycle = still ? 0 : seconds % 4.8;
         const blinking = !closed && blinkCycle > 4.58;
         const thinking = this.state === PET_STATES.THINKING;

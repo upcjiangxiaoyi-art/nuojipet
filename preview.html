@@ -111,6 +111,7 @@
                 <button data-state="happy">开心</button>
                 <button data-state="confused">迷糊</button>
                 <button data-state="petting">摸摸</button>
+                <button data-state="nuzzling">蹭蹭你</button>
                 <button data-state="sleeping">困嘟嘟</button>
                 <button data-state="wave">挥爪</button>
                 <button data-form="walking" data-direction="-1">向左走</button>
@@ -132,12 +133,13 @@
     </main>
 
     <script type="module">
-        import { NuojiRenderer, PET_STATES } from './pet-renderer.js';
+        import { NuojiRenderer, PET_STATES, NUZZLE_DURATION_MS } from './pet-renderer.js';
 
         const canvas = document.getElementById('nuoji-preview');
         const renderer = new NuojiRenderer(canvas);
         renderer.start();
 
+        let reactionTimer;
         let walking = false;
         let phase = 0;
         let lastTick = 0;
@@ -162,6 +164,7 @@
         });
 
         const setState = (state) => {
+            clearTimeout(reactionTimer);
             walking = false;
             renderer.setForm(
                 state === PET_STATES.SLEEPING
@@ -169,6 +172,9 @@
                     : state === PET_STATES.THINKING ? 'ball' : 'sitting',
             );
             renderer.setState(state);
+            if (state === PET_STATES.NUZZLING) {
+                reactionTimer = setTimeout(() => setState(PET_STATES.IDLE), NUZZLE_DURATION_MS);
+            }
             document.querySelectorAll('button').forEach((button) => {
                 button.classList.toggle('is-active', button.dataset.state === state);
             });
@@ -180,6 +186,7 @@
 
         document.querySelectorAll('[data-form="walking"]').forEach((button) => {
             button.addEventListener('click', () => {
+                clearTimeout(reactionTimer);
                 walking = true;
                 renderer.setWalkDirection(Number(button.dataset.direction));
                 renderer.setForm('walking');

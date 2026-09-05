@@ -1,4 +1,4 @@
-import { NuojiRenderer, PET_STATES, getWalkStrideLength } from './pet-renderer.js';
+import { NuojiRenderer, PET_STATES, getWalkStrideLength, NUZZLE_DURATION_MS } from './pet-renderer.js';
 
 const MODULE_NAME = 'nuoji_pet';
 const DEFAULT_EXTENSION_NAME = 'third-party/nuoji-pet';
@@ -50,6 +50,7 @@ const stateLabels = Object.freeze({
     [PET_STATES.HAPPY]: '糯叽很开心',
     [PET_STATES.CONFUSED]: '糯叽有点迷糊',
     [PET_STATES.PETTING]: '糯叽被摸摸了',
+    [PET_STATES.NUZZLING]: '糯叽在蹭蹭你',
     [PET_STATES.SLEEPING]: '糯叽睡着了',
     [PET_STATES.WAVE]: '糯叽在挥爪',
 });
@@ -541,7 +542,7 @@ function bindSettingsControls() {
             }
 
             transitionTo(state, {
-                duration: state === PET_STATES.SLEEPING ? 3000 : 1800,
+                duration: state === PET_STATES.NUZZLING ? NUZZLE_DURATION_MS : state === PET_STATES.SLEEPING ? 3000 : 1800,
                 bubble: previewBubbleFor(state),
                 priority: 35,
                 force: true,
@@ -578,6 +579,7 @@ function previewBubbleFor(state) {
         [PET_STATES.HAPPY]: '好耶！',
         [PET_STATES.CONFUSED]: '欸？',
         [PET_STATES.PETTING]: '呼噜呼噜～',
+        [PET_STATES.NUZZLING]: '蹭蹭你，再蹭一下～',
         [PET_STATES.SLEEPING]: '困嘟嘟…',
         [PET_STATES.WAVE]: '小狐狸回来啦！',
     };
@@ -867,9 +869,9 @@ function registerTap(clientX, clientY) {
 }
 
 function doublePetNuoji() {
-    transitionTo(PET_STATES.HAPPY, {
-        duration: 2200,
-        bubble: '翻个软乎乎的小肚皮～',
+    transitionTo(PET_STATES.NUZZLING, {
+        duration: NUZZLE_DURATION_MS,
+        bubble: '蹭蹭你，再蹭一下～',
         priority: 48,
         force: true,
     });
@@ -1487,7 +1489,7 @@ function bindCustomReactionEvent() {
         }
 
         transitionTo(state, {
-            duration: clamp(Number(event.detail?.duration) || 1800, 300, 10000),
+            duration: clamp(Number(event.detail?.duration) || (state === PET_STATES.NUZZLING ? NUZZLE_DURATION_MS : 1800), 300, 10000),
             bubble: String(event.detail?.message ?? ''),
             priority: 30,
             force: true,
@@ -1620,10 +1622,13 @@ async function initialize() {
                     awaitingLateReply,
                 });
             },
-            react(state, message = '', duration = 1800) {
+            react(state, message = '', duration = state === PET_STATES.NUZZLING ? NUZZLE_DURATION_MS : 1800) {
                 window.dispatchEvent(new CustomEvent('nuoji:react', {
                     detail: { state, message, duration },
                 }));
+            },
+            nuzzle() {
+                doublePetNuoji();
             },
             lieDown() {
                 clearPoseTimer();
