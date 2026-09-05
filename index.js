@@ -1,4 +1,4 @@
-import { NuojiRenderer, PET_STATES } from './pet-renderer.js';
+import { NuojiRenderer, PET_STATES, getWalkStrideLength } from './pet-renderer.js';
 
 const MODULE_NAME = 'nuoji_pet';
 const DEFAULT_EXTENSION_NAME = 'third-party/nuoji-pet';
@@ -1088,9 +1088,8 @@ function startAutoWalk(preferredDirection = 0, duration = WALK_DURATION, { annou
     }
 
     const safeDuration = clamp(finiteNumber(duration, WALK_DURATION), 600, 6000);
-    // Match the page translation to the paw sweep. The old 0.52-body stride
-    // outran a rigid one-piece leg and made every planted paw skid backward.
-    const strideLength = Math.max(24, ui.root.getBoundingClientRect().width * 0.24);
+    // Use the same plate-space stride as the renderer, including mobile scale.
+    const strideLength = getWalkStrideLength(ui.root.getBoundingClientRect().width);
     roamRun = { ...path, duration: safeDuration, strideLength, startedAt: undefined };
     renderer.setWalkDirection(path.direction);
     renderer.setWalkProgress(0, strideLength);

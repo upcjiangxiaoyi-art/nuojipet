@@ -41,6 +41,9 @@ const TAU = Math.PI * 2;
 // part that lifts. The slightly uneven 0.27 / 0.23 spacing keeps the diagonal
 // couplets soft instead of snapping two legs together like a trot.
 const WALK_STANCE_PORTION = 0.72;
+// One full cycle's page travel in source-plate pixels. The planted paw moves
+// backwards by exactly the same amount; do not tune DOM travel separately.
+const WALK_STRIDE_PLATE = 150;
 // `paw` is the resting paw-pad contact point relative to the pivot and
 // `ground` the plate row that paw must stand on. A rigid leg swinging about
 // its shoulder/hip lifts the paw on an arc, and the near front leg is painted
@@ -97,7 +100,8 @@ function smootherStep(value) {
 }
 
 /**
- * Return one leg's pose for a distance-driven four-beat walking cycle.
+ * Legacy rigid-leg pose, retained for external debug callers.
+ * The renderer now uses getWalkFootTarget and getWalkSkinOffset.
  * Exported so the gait can be regression-tested without depending on timing.
  */
 export function getWalkLegPose(phaseRadians, legName) {
@@ -147,6 +151,7 @@ export function getWalkLegPose(phaseRadians, legName) {
 }
 
 /**
+ * Legacy contact helper for the old rigid-leg pose. Not used by the renderer.
  * Work out how far a posed leg must extend and then drop (in plate pixels)
  * for its paw pad to rest exactly on the ground line. Exported for tests.
  */
@@ -164,32 +169,85 @@ export function getWalkGroundContact(leg, pose) {
     return { stretch, drop: needed - stretch * perStretch };
 }
 
+/** Foot trajectory in plate pixels. Stance cancels page travel exactly. */
+export function getWalkFootTarget(phaseRadians, legName, still = false) {
+    const leg = WALK_LEGS.find((candidate) => candidate.name === legName);
+    if (!leg) throw new RangeError(`Unknown walking leg: ${legName}`);
+    const cycle = wrapUnit((Number(phaseRadians) || 0) / TAU - leg.touchdown);
+    const halfSweep = WALK_STRIDE_PLATE * WALK_STANCE_PORTION / 2;
+    let offsetX = 0;
+    let lift = 0;
+    let curl = 0;
+    let swinging = false;
+    if (!still && cycle < WALK_STANCE_PORTION) {
+        offsetX = -halfSweep + WALK_STRIDE_PLATE * cycle;
+    } else if (!still) {
+        swinging = true;
+        const swing = (cycle - WALK_STANCE_PORTION) / (1 - WALK_STANCE_PORTION);
+        // Quintic return preserves stance velocity and zero acceleration at
+        // both ends, so landing has neither a pause nor a velocity snap.
+        offsetX = halfSweep + WALK_STRIDE_PLATE * (1 - WALK_STANCE_PORTION) * swing
+            - WALK_STRIDE_PLATE * smootherStep(swing);
+        curl = Math.sin(Math.PI * swing) ** 2;
+        lift = curl * (leg.name.endsWith('Near') ? 30 : 24);
+    }
+    return {
+        x: leg.pivot.x + leg.paw.x + offsetX,
+        y: leg.ground - lift,
+        offsetX, lift, curl, cycle, swinging,
+    };
+}
+
+export function getWalkStrideLength(cssWidth, plateWidth = 1402, plateHeight = 1122) {
+    const fit = Math.min(465 / plateWidth, 382 / plateHeight);
+    return Math.max(1, Number(cssWidth) || DESIGN_SIZE) / DESIGN_SIZE * fit * WALK_STRIDE_PLATE;
+}
+
+/** Skin weights: the shoulder/hip stays attached; the wrist/ankle is rigid. */
+export function getWalkSkinOffset(legName, sourceY, target) {
+    const leg = WALK_LEGS.find((candidate) => candidate.name === legName);
+    if (!leg) throw new RangeError(`Unknown walking leg: ${legName}`);
+    const end = leg.wrist ? leg.wrist.y - 30 : leg.pivot.y + leg.paw.y - 65;
+    const weight = smootherStep((sourceY - leg.pivot.y) / (end - leg.pivot.y));
+    return {
+        x: (target.x - leg.pivot.x - leg.paw.x) * weight,
+        y: (target.y - leg.pivot.y - leg.paw.y) * weight,
+    };
+}
+
 function drawWalkingLeg(ctx, layers, leg, phase, still, walkWidth, walkHeight, walkFitScale) {
     const image = layers[leg.name];
-    const pose = still
-        ? { angle: 0, lift: 0, tuck: 0, curl: 0 }
-        : getWalkLegPose(phase, leg.name);
-    const pivotX = -walkWidth / 2 + leg.pivot.x * walkFitScale;
-    const pivotY = -walkHeight + leg.pivot.y * walkFitScale;
-    const contact = getWalkGroundContact(leg, pose);
+    const target = getWalkFootTarget(phase, leg.name, still);
     ctx.save();
-    ctx.translate(0, contact.drop * walkFitScale - pose.lift);
-    ctx.translate(pivotX, pivotY);
-    ctx.rotate(pose.angle);
-    // A tiny shortening at mid-swing suggests elbow/hock flex, and the stance
-    // extension straightens the leg toward the ground, without adding extra
-    // images or exposing the hidden shoulder/hip seam.
-    ctx.scale(1, (1 - pose.tuck) * (1 + contact.stretch));
-    ctx.translate(-pivotX, -pivotY);
-    ctx.drawImage(image, -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
+    ctx.translate(-walkWidth / 2, -walkHeight);
+    ctx.scale(walkFitScale, walkFitScale);
+    // Horizontal texture strips form a continuous deforming skin. Their top
+    // and bottom share the same edge transform, leaving no moving joint cut.
+    // Crop to the limb neighbourhood to keep mobile draw work bounded.
+    const x = Math.max(0, leg.pivot.x - 230);
+    const width = Math.min(image.width - x, 430);
+    const top = Math.max(0, leg.pivot.y - 130);
+    const bottom = Math.min(image.height, leg.pivot.y + leg.paw.y + 55);
+    const band = 12;
+    for (let y = top; y < bottom; y += band) {
+        const height = Math.min(band, bottom - y);
+        const a = getWalkSkinOffset(leg.name, y, target);
+        const b = getWalkSkinOffset(leg.name, y + height, target);
+        const shear = (b.x - a.x) / height;
+        const scaleY = 1 + (b.y - a.y) / height;
+        ctx.save();
+        ctx.transform(1, 0, shear, scaleY, a.x - shear * y, a.y - (scaleY - 1) * y);
+        // A subpixel overlap prevents raster cracks at shared strip edges.
+        const bleed = 1.25 / walkFitScale;
+        ctx.drawImage(image, x, y, width, height + bleed, x, y, width, height + bleed);
+        ctx.restore();
+    }
     if (leg.pawLayer && layers[leg.pawLayer]) {
-        // Hinge the paw at the wrist: flat on the ground, curled in the air.
-        const wristX = -walkWidth / 2 + leg.wrist.x * walkFitScale;
-        const wristY = -walkHeight + leg.wrist.y * walkFitScale;
-        ctx.translate(wristX, wristY);
-        ctx.rotate(leg.flatAngle * (1 - (pose.curl || 0)));
-        ctx.translate(-wristX, -wristY);
-        ctx.drawImage(layers[leg.pawLayer], -walkWidth / 2, -walkHeight, walkWidth, walkHeight);
+        const shift = getWalkSkinOffset(leg.name, leg.wrist.y, target);
+        ctx.translate(shift.x + leg.wrist.x, shift.y + leg.wrist.y);
+        ctx.rotate(leg.flatAngle * (1 - target.curl));
+        ctx.translate(-leg.wrist.x, -leg.wrist.y);
+        ctx.drawImage(layers[leg.pawLayer], 0, 0);
     }
     ctx.restore();
 }
@@ -1002,13 +1060,12 @@ export class NuojiRenderer {
             ctx.globalAlpha = alpha * walkingBlend;
             // The production plate has generous green-key margin below the paws.
             // Lower its canvas origin so the visible feet meet the shared ground line.
-            ctx.translate(250, 512 - bob + (1 - walkingBlend) * 14);
-            ctx.rotate(lean * walkingBlend);
+            ctx.translate(250, 512 + (1 - walkingBlend) * 14);
             // The production plate faces left. Mirror it only while travelling right.
             ctx.scale(-this.walkDirection, 1);
             ctx.scale(
-                (1 + squash) * (1 - formFold * 0.035),
-                (1 - squash * 0.7) * (1 - formFold * 0.14),
+                1 - formFold * 0.035,
+                1 - formFold * 0.14,
             );
             if (this.walkLayersReady) {
                 // The tail plume swings behind everything: the mood sway from
@@ -1019,8 +1076,9 @@ export class NuojiRenderer {
                 const bodyAnchorX = -walkWidth / 2 + WALK_BODY_ANCHOR.x * walkFitScale;
                 const bodyAnchorY = -walkHeight + WALK_BODY_ANCHOR.y * walkFitScale;
                 const applyBodyPlateTransform = () => {
-                    ctx.translate(bodyAnchorX, bodyAnchorY + WALK_BODY_DROP * walkFitScale);
-                    ctx.scale(WALK_BODY_SCALE, WALK_BODY_SCALE);
+                    ctx.translate(bodyAnchorX, bodyAnchorY + WALK_BODY_DROP * walkFitScale - bob);
+                    ctx.rotate(lean);
+                    ctx.scale(WALK_BODY_SCALE * (1 + squash), WALK_BODY_SCALE * (1 - squash * 0.7));
                     ctx.translate(-bodyAnchorX, -bodyAnchorY);
                 };
                 ctx.save();

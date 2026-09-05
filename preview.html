@@ -103,7 +103,7 @@
         </section>
         <section class="controls">
             <h1>糯叽动作检查台</h1>
-            <p>这是独立预览，不需要启动 SillyTavern。“想一想”检查滚动团子，“困嘟嘟”检查趴姿，“走两步”检查左右镜像的小步姿势。</p>
+            <p>这是独立预览，不需要启动 SillyTavern。“想一想”检查滚动团子，“困嘟嘟”检查趴姿，“向左走／向右走”会循环播放步态，可以暂停后拖动进度，检查腿根和脚掌。</p>
             <div class="buttons">
                 <button data-state="idle">陪伴</button>
                 <button data-state="listening">听你说</button>
@@ -116,6 +116,14 @@
                 <button data-form="walking" data-direction="-1">向左走</button>
                 <button data-form="walking" data-direction="1">向右走</button>
             </div>
+            <label>
+                <input id="pause-walk" type="checkbox" />
+                暂停步态，逐帧检查
+            </label>
+            <label>
+                步态进度
+                <input id="walk-phase" type="range" min="0" max="1000" value="0" aria-label="步态进度" style="min-width:0;flex:1" />
+            </label>
             <label>
                 <input id="reduce-motion" type="checkbox" />
                 减少动态效果
@@ -130,14 +138,38 @@
         const renderer = new NuojiRenderer(canvas);
         renderer.start();
 
+        let walking = false;
+        let phase = 0;
+        let lastTick = 0;
+        const pauseWalk = document.getElementById('pause-walk');
+        const phaseSlider = document.getElementById('walk-phase');
+        const tick = (now) => {
+            const delta = lastTick ? Math.min(80, now - lastTick) : 0;
+            lastTick = now;
+            if (walking && renderer.walkReady && !renderer.reducedMotion && !pauseWalk.checked && !document.hidden) {
+                phase = (phase + delta / 1500) % 1;
+                renderer.setWalkProgress(phase, 1);
+                phaseSlider.value = String(Math.round(phase * 1000));
+            }
+            requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+        phaseSlider.addEventListener('input', () => {
+            pauseWalk.checked = true;
+            phase = Number(phaseSlider.value) / 1000;
+            renderer.setWalkProgress(phase, 1);
+            renderer.draw(performance.now());
+        });
+
         const setState = (state) => {
+            walking = false;
             renderer.setForm(
                 state === PET_STATES.SLEEPING
                     ? 'lying'
                     : state === PET_STATES.THINKING ? 'ball' : 'sitting',
             );
             renderer.setState(state);
-            document.querySelectorAll('[data-state]').forEach((button) => {
+            document.querySelectorAll('button').forEach((button) => {
                 button.classList.toggle('is-active', button.dataset.state === state);
             });
         };
@@ -148,6 +180,7 @@
 
         document.querySelectorAll('[data-form="walking"]').forEach((button) => {
             button.addEventListener('click', () => {
+                walking = true;
                 renderer.setWalkDirection(Number(button.dataset.direction));
                 renderer.setForm('walking');
                 renderer.setState(PET_STATES.IDLE);
